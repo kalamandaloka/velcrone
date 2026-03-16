@@ -6,17 +6,20 @@ use App\Http\Controllers\Controller;
 use App\Models\Barang;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class BarangController extends Controller
 {
+    private const UKURAN_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
+
     public function index(): JsonResponse
     {
         $data = Barang::query()->orderBy('nama')->get()->map(function ($b) {
             return [
                 'kode' => $b->kode,
                 'nama' => $b->nama,
-                'stok' => (int) $b->stok,
-                'satuan' => $b->satuan,
+                'kategori' => $b->kategori,
+                'ukuran' => $this->normalizeUkuran($b->ukuran),
                 'hargaBeli' => (float) $b->harga_beli,
                 'hargaJual' => (float) $b->harga_jual,
                 'diskon' => (float) $b->diskon,
@@ -33,8 +36,8 @@ class BarangController extends Controller
         return response()->json([
             'kode' => $b->kode,
             'nama' => $b->nama,
-            'stok' => (int) $b->stok,
-            'satuan' => $b->satuan,
+            'kategori' => $b->kategori,
+            'ukuran' => $this->normalizeUkuran($b->ukuran),
             'hargaBeli' => (float) $b->harga_beli,
             'hargaJual' => (float) $b->harga_jual,
             'diskon' => (float) $b->diskon,
@@ -43,21 +46,26 @@ class BarangController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->normalizeUkuranInRequest($request);
         $validated = $request->validate([
-            'kode' => ['required', 'string'],
+            'kode' => ['required', 'string', Rule::unique('barangs', 'kode')],
             'nama' => ['required', 'string'],
-            'stok' => ['nullable', 'integer'],
-            'satuan' => ['required', 'string'],
+            'kategori' => ['nullable', 'string'],
+            'ukuran' => ['required', 'array', 'min:1'],
+            'ukuran.*' => ['string', Rule::in(self::UKURAN_OPTIONS)],
             'hargaBeli' => ['required', 'numeric'],
             'hargaJual' => ['required', 'numeric'],
             'diskon' => ['nullable', 'numeric'],
+        ], [
+            'kode.unique' => 'Kode barang sudah terpakai',
         ]);
 
         $barang = Barang::create([
             'kode' => $validated['kode'],
             'nama' => $validated['nama'],
-            'stok' => $validated['stok'] ?? 0,
-            'satuan' => $validated['satuan'],
+            'kategori' => $validated['kategori'] ?? null,
+            'ukuran' => implode(',', $validated['ukuran']),
+            'satuan' => 'pcs',
             'harga_beli' => $validated['hargaBeli'],
             'harga_jual' => $validated['hargaJual'],
             'diskon' => $validated['diskon'] ?? 0,
@@ -72,10 +80,12 @@ class BarangController extends Controller
     public function update(Request $request, string $kode): JsonResponse
     {
         $barang = Barang::findOrFail($kode);
+        $this->normalizeUkuranInRequest($request);
         $validated = $request->validate([
             'nama' => ['sometimes', 'string'],
-            'stok' => ['sometimes', 'integer'],
-            'satuan' => ['sometimes', 'string'],
+            'kategori' => ['sometimes', 'nullable', 'string'],
+            'ukuran' => ['sometimes', 'array', 'min:1'],
+            'ukuran.*' => ['string', Rule::in(self::UKURAN_OPTIONS)],
             'hargaBeli' => ['sometimes', 'numeric'],
             'hargaJual' => ['sometimes', 'numeric'],
             'diskon' => ['sometimes', 'numeric'],
@@ -83,8 +93,8 @@ class BarangController extends Controller
 
         $barang->update([
             'nama' => $validated['nama'] ?? $barang->nama,
-            'stok' => $validated['stok'] ?? $barang->stok,
-            'satuan' => $validated['satuan'] ?? $barang->satuan,
+            'kategori' => array_key_exists('kategori', $validated) ? $validated['kategori'] : $barang->kategori,
+            'ukuran' => array_key_exists('ukuran', $validated) ? implode(',', $validated['ukuran']) : $barang->ukuran,
             'harga_beli' => $validated['hargaBeli'] ?? $barang->harga_beli,
             'harga_jual' => $validated['hargaJual'] ?? $barang->harga_jual,
             'diskon' => $validated['diskon'] ?? $barang->diskon,
@@ -99,5 +109,29 @@ class BarangController extends Controller
         $barang->delete();
 
         return response()->json(['message' => 'Barang deleted']);
+    }
+
+    private function normalizeUkuranInRequest(Request $request): void
+    {
+        $value = $request->input('ukuran');
+        if ($value === null) return;
+        if (is_array($value)) {
+            $request->merge([
+                'ukuran' => array_values(array_filter(array_map(fn ($v) => strtoupper(trim((string) $v)), $value))),
+            ]);
+            return;
+        }
+        if (is_string($value)) {
+            $parts = preg_split('/\s*,\s*/', strtoupper(trim($value))) ?: [];
+            $request->merge(['ukuran' => array_values(array_filter($parts))]);
+        }
+    }
+
+    private function normalizeUkuran(?string $value): array
+    {
+        $raw = strtoupper(trim((string) $value));
+        if ($raw === '') return [];
+        $parts = preg_split('/\s*,\s*/', $raw) ?: [];
+        return array_values(array_filter($parts));
     }
 }

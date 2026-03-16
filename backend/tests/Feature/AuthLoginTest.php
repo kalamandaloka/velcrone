@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -10,25 +9,21 @@ class AuthLoginTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_guest_is_redirected_to_login_for_dashboard(): void
+    public function test_root_route_is_not_serving_frontend(): void
     {
-        $this->get('/')->assertRedirect('/login');
+        $this->get('/')->assertNotFound();
     }
 
-    public function test_user_can_login_and_access_dashboard(): void
+    public function test_login_route_is_not_available(): void
     {
-        $user = User::create([
-            'name' => 'Administrator',
-            'email' => 'admin@admin.com',
-            'password' => 'admin',
-            'role' => 'administrator',
-        ]);
+        $this->get('/login')->assertNotFound();
+        $this->post('/login')->assertNotFound();
+    }
 
-        $this->post('/login', [
-            'email' => $user->email,
-            'password' => 'admin',
-        ])->assertRedirect('/dashboard');
-
-        $this->get('/dashboard')->assertOk();
+    public function test_barang_index_returns_json_array(): void
+    {
+        $this->getJson('/api/v1/barang')
+            ->assertOk()
+            ->assertJsonIsArray();
     }
 }

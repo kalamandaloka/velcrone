@@ -4,9 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class Barang extends Model
+class Bahan extends Model
 {
-    protected $table = 'barangs';
+    protected $table = 'bahans';
 
     protected $primaryKey = 'kode';
 
@@ -18,10 +18,9 @@ class Barang extends Model
         'kode',
         'nama',
         'kategori',
-        'ukuran',
+        'jenis_produk',
+        'stok',
         'satuan',
-        'harga_beli',
-        'harga_jual',
-        'diskon',
+        'min_stok',
     ];
 }
