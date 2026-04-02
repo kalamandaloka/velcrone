@@ -10,7 +10,20 @@ use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
-    private const ALLOWED_ROLES = ['superadmin', 'owner', 'manager', 'kasir'];
+    private const ALLOWED_ROLES = [
+        'superadmin',
+        'owner',
+        'manager',
+        'kasir',
+        'design',
+        'setting',
+        'printing',
+        'heat press',
+        'sewing',
+        'qc',
+        'packing',
+        'delivery',
+    ];
 
     private const ALLOWED_STATUSES = ['active', 'inactive'];
 

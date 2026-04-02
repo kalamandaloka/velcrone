@@ -11,6 +11,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 
 Route::prefix('v1')->group(function () {
     Route::get('/health', fn () => response()->json(['status' => 'ok']));
@@ -75,4 +76,77 @@ Route::prefix('v1')->group(function () {
     Route::post('/transaksi', [TransaksiController::class, 'store']);
     Route::get('/transaksi/{id}', [TransaksiController::class, 'show']);
     Route::put('/transaksi/{id}', [TransaksiController::class, 'update']);
+
+    Route::post('/uploads/spk', function (Request $request) {
+        $validated = $request->validate([
+            'invoice' => ['required', 'string', 'max:100'],
+            'productId' => ['required', 'string', 'max:100'],
+            'warna' => ['nullable', 'string', 'max:50'],
+            'type' => ['required', 'string', 'in:design,sponsor'],
+            'file' => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $uploadsPath = env('SPK_UPLOADS_PATH');
+        $websiteUploads = is_string($uploadsPath) && trim($uploadsPath) !== ''
+            ? rtrim(trim($uploadsPath), DIRECTORY_SEPARATOR)
+            : base_path('../website/public/uploads');
+        if (! is_dir($websiteUploads)) {
+            if (! @mkdir($websiteUploads, 0755, true) && ! is_dir($websiteUploads)) {
+                return response()->json(['message' => 'Gagal membuat folder uploads'], 500);
+            }
+        }
+
+        $invoice = (string) $validated['invoice'];
+        $productId = (string) $validated['productId'];
+        $warna = array_key_exists('warna', $validated) ? (string) ($validated['warna'] ?? '') : '';
+        $type = (string) $validated['type'];
+
+        $safe = fn (string $v) => preg_replace('/[^A-Za-z0-9_-]+/', '_', $v);
+        $ext = strtolower((string) $request->file('file')->getClientOriginalExtension());
+        if ($ext === '') $ext = 'png';
+
+        $filename = sprintf(
+            'spk_%s_%s_%s_%s_%s.%s',
+            $safe($invoice),
+            $safe($productId),
+            $safe($warna),
+            $safe($type),
+            Str::random(8),
+            $ext
+        );
+
+        try {
+            $request->file('file')->move($websiteUploads, $filename);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Gagal menyimpan file upload'], 500);
+        }
+
+        $url = rtrim($request->getSchemeAndHttpHost(), '/') . '/api/v1/uploads/spk/' . rawurlencode($filename);
+
+        return response()->json([
+            'path' => "/uploads/{$filename}",
+            'url' => $url,
+        ], 201);
+    });
+
+    Route::get('/uploads/spk/{filename}', function (string $filename) {
+        $filename = (string) $filename;
+        if ($filename === '' || str_contains($filename, '..') || str_contains($filename, '/') || str_contains($filename, '\\')) {
+            return response()->json(['message' => 'Filename tidak valid'], 400);
+        }
+        if (! preg_match('/^[A-Za-z0-9_.-]+$/', $filename)) {
+            return response()->json(['message' => 'Filename tidak valid'], 400);
+        }
+
+        $uploadsPath = env('SPK_UPLOADS_PATH');
+        $websiteUploads = is_string($uploadsPath) && trim($uploadsPath) !== ''
+            ? rtrim(trim($uploadsPath), DIRECTORY_SEPARATOR)
+            : base_path('../website/public/uploads');
+        $fullPath = $websiteUploads . DIRECTORY_SEPARATOR . $filename;
+        if (! is_file($fullPath)) {
+            return response()->json(['message' => 'File tidak ditemukan'], 404);
+        }
+
+        return response()->file($fullPath);
+    })->where('filename', '.*');
 });

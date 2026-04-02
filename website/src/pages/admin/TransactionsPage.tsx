@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatRupiah, getStatusColor } from '@/constants/dummy';
+import { useAuth } from '@/hooks/useAuth';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ type TransaksiItem = {
   productId: string;
   productName: string;
   ukuran: string;
+  warna: string;
   qty: number;
   price: number;
   subtotal: number;
@@ -35,6 +37,7 @@ type Transaksi = {
   status: TransaksiStatus;
   cancelReason?: string | null;
   productionStatus: string;
+  spkDetail: SpkDetailMap;
   paymentStatus: string;
   paymentStep: number;
   paymentDue: number;
@@ -43,15 +46,23 @@ type Transaksi = {
   paymentMethod: string;
 };
 
+type SpkDetailEntry = {
+  stepStatus: string | null;
+  deadlineDate: string | null;
+};
+
+type SpkDetailMap = Record<string, SpkDetailEntry>;
+
 type Barang = {
   kode: string;
   nama: string;
   ukuran: string[];
+  warna: string[];
   hargaJual: number;
   diskon: number;
 };
 
-type PelangganOption = { id: string; nama: string };
+type PelangganOption = { id: string; nama: string; kategori: string | null };
 type PelangganDetail = {
   id: string;
   nama: string;
@@ -62,6 +73,7 @@ type PelangganDetail = {
   kecamatan: string | null;
   kelurahan: string | null;
   kodepos: string | null;
+  kategori: string | null;
 };
 
 async function parseJsonSafe(response: Response) {
@@ -70,6 +82,20 @@ async function parseJsonSafe(response: Response) {
   } catch {
     return null;
   }
+}
+
+function normalizeSpkDetail(value: unknown): SpkDetailMap {
+  if (!value || typeof value !== 'object') return {};
+  const obj = value as Record<string, unknown>;
+  const out: SpkDetailMap = {};
+  for (const [key, raw] of Object.entries(obj)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const stepStatus = typeof row.stepStatus === 'string' && row.stepStatus.trim() ? row.stepStatus : null;
+    const deadlineDate = typeof row.deadlineDate === 'string' && row.deadlineDate.trim() ? row.deadlineDate.slice(0, 10) : null;
+    out[key] = { stepStatus, deadlineDate };
+  }
+  return out;
 }
 
 function normalizeTransaksi(raw: unknown): Transaksi | null {
@@ -94,6 +120,7 @@ function normalizeTransaksi(raw: unknown): Transaksi | null {
       const productId = typeof item.productId === 'string' ? item.productId : '';
       const productName = typeof item.productName === 'string' ? item.productName : '';
       const ukuran = typeof item.ukuran === 'string' ? item.ukuran : '';
+      const warna = typeof item.warna === 'string' ? item.warna : '';
       const qty = typeof item.qty === 'number' ? item.qty : Number(item.qty);
       const price = typeof item.price === 'number' ? item.price : Number(item.price);
       const subtotal = typeof item.subtotal === 'number' ? item.subtotal : Number(item.subtotal);
@@ -102,6 +129,7 @@ function normalizeTransaksi(raw: unknown): Transaksi | null {
         productId,
         productName,
         ukuran,
+        warna,
         qty: Number.isFinite(qty) ? qty : 0,
         price: Number.isFinite(price) ? price : 0,
         subtotal: Number.isFinite(subtotal) ? subtotal : 0,
@@ -115,6 +143,7 @@ function normalizeTransaksi(raw: unknown): Transaksi | null {
   const customerName = typeof obj.customerName === 'string' ? obj.customerName : '';
   const cancelReason = typeof obj.cancelReason === 'string' ? obj.cancelReason : null;
   const productionStatus = typeof obj.productionStatus === 'string' ? obj.productionStatus : 'order_masuk';
+  const spkDetail = normalizeSpkDetail(obj.spkDetail);
   const paymentStatus = typeof obj.paymentStatus === 'string' ? obj.paymentStatus : 'belum_lunas';
   const paymentStep =
     typeof obj.paymentStep === 'number'
@@ -139,6 +168,7 @@ function normalizeTransaksi(raw: unknown): Transaksi | null {
     status,
     cancelReason,
     productionStatus,
+    spkDetail,
     paymentStatus,
     paymentStep: Number.isFinite(paymentStep) ? paymentStep : 0,
     paymentDue: Number.isFinite(paymentDue) ? paymentDue : Number.isFinite(total) ? total : 0,
@@ -210,11 +240,12 @@ function buildInvoiceHtml(args: {
   const rows = t.items
     .map((item) => {
       const ukuran = item.ukuran;
+      const warna = item.warna;
       return `<tr>
   <td class="td center">${escapeHtml(item.productId)}</td>
   <td class="td">${escapeHtml(item.productName)}</td>
   <td class="td center">${escapeHtml(ukuran || '-')}</td>
-  <td class="td center">-</td>
+  <td class="td center">${escapeHtml(warna || '-')}</td>
   <td class="td center">${item.qty}</td>
   <td class="td center">pcs</td>
   <td class="td right">${escapeHtml(formatRupiah(item.price))}</td>
@@ -330,7 +361,7 @@ function buildInvoiceHtml(args: {
             <th style="width:80px">KODE</th>
             <th>NAMA PRODUK</th>
             <th style="width:86px">SIZE<br/>ATASAN</th>
-            <th style="width:86px">SIZE<br/>BAWAHAN</th>
+            <th style="width:86px">WARNA</th>
             <th style="width:70px">JUMLAH</th>
             <th style="width:70px">SATUAN</th>
             <th style="width:100px">HARGA</th>
@@ -575,9 +606,81 @@ const statusIcons = {
   cancelled: <XCircle size={20} className="text-destructive" />,
 };
 
+function formatTimestampJakarta(value: string | null): string {
+  if (!value) return '-';
+  return `${value} WIB`;
+}
+
+function stableHash(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+function getSpkStepStatusStorageKey(args: { invoice: string; productId: string; warna: string | null }): string {
+  const warna = args.warna || '';
+  return `velcrone:spk_step:${args.invoice}:${args.productId}:${warna}`;
+}
+
+function readLocalStorageSafe(key: string): string | null {
+  try {
+    const v = localStorage.getItem(key);
+    return v && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSpkCompletionFromLocalStorage(t: Pick<Transaksi, 'invoice' | 'items' | 'spkDetail'>): { done: number; total: number } {
+  const grouped = new Map<string, { productId: string; warna: string }>();
+  for (const it of t.items || []) {
+    const productId = (it.productId || '').trim();
+    const warna = (it.warna || '').trim();
+    if (!productId) continue;
+    const key = `${productId}::${warna}`;
+    if (!grouped.has(key)) grouped.set(key, { productId, warna });
+  }
+
+  const entries = Array.from(grouped.values());
+  const total = entries.length;
+  if (!total) return { done: 0, total: 0 };
+
+  let done = 0;
+  const hasDbSpkDetail = t.spkDetail && Object.keys(t.spkDetail).length > 0;
+  for (const spk of entries) {
+    const spkKey = `${spk.productId}::${spk.warna}`;
+    if (hasDbSpkDetail) {
+      const status = t.spkDetail[spkKey]?.stepStatus || null;
+      if (status === 'SELESAI') done += 1;
+      continue;
+    }
+
+    const key = getSpkStepStatusStorageKey({ invoice: t.invoice, productId: spk.productId, warna: spk.warna });
+    const status = readLocalStorageSafe(key);
+    if (status === 'SELESAI') done += 1;
+  }
+  return { done, total };
+}
+
+function formatDateJakartaIso(value: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
+}
+
+function getPaymentBadge(paymentStatus: string): { label: string; className: string } {
+  const normalized = String(paymentStatus || '').toLowerCase();
+  if (normalized === 'lunas') {
+    return { label: 'Lunas', className: 'bg-velcrone-success/10 text-velcrone-success' };
+  }
+  return { label: 'Belum Lunas', className: 'bg-velcrone-warning/10 text-velcrone-warning' };
+}
+
 export default function TransactionsPage() {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Transaksi | null>(null);
@@ -589,7 +692,7 @@ export default function TransactionsPage() {
     customerId: 'umum',
     customerName: '',
     paymentMethod: 'cash',
-    items: [{ productId: 'pilih', ukuran: 'pilih', qty: '1', price: '' }],
+    items: [{ productId: 'pilih', ukuran: 'pilih', warna: 'pilih', qty: '1', price: '' }],
   });
 
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -607,6 +710,34 @@ export default function TransactionsPage() {
         .filter((v): v is Transaksi => !!v);
     },
   });
+
+  const markProductionDoneMutation = useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      const response = await fetch(`${apiBaseUrl}/api/v1/transaksi/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productionStatus: 'selesai', productionDate: formatDateJakartaIso() }),
+      });
+      const payload = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(getApiErrorMessage(payload, 'Gagal menandai produksi selesai'));
+      return payload;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['transaksi'] });
+    },
+  });
+
+  useEffect(() => {
+    const data = listQuery.data ?? [];
+    for (const t of data) {
+      if (t.status === 'cancelled') continue;
+      if ((t.productionStatus || '').toLowerCase() === 'selesai') continue;
+      const spk = getSpkCompletionFromLocalStorage(t);
+      if (spk.total > 0 && spk.done === spk.total) {
+        markProductionDoneMutation.mutate({ id: t.id });
+      }
+    }
+  }, [listQuery.data, markProductionDoneMutation]);
 
   const pelangganDetailQuery = useQuery({
     queryKey: ['pelanggan', 'detail', selected?.customerId || ''],
@@ -628,6 +759,7 @@ export default function TransactionsPage() {
         kecamatan: typeof obj.kecamatan === 'string' ? obj.kecamatan : null,
         kelurahan: typeof obj.kelurahan === 'string' ? obj.kelurahan : null,
         kodepos: typeof obj.kodepos === 'string' ? obj.kodepos : null,
+        kategori: typeof obj.kategori === 'string' ? obj.kategori : null,
       };
     },
   });
@@ -644,6 +776,7 @@ export default function TransactionsPage() {
         .map((p) => ({
           id: typeof p.id === 'string' ? p.id : '',
           nama: typeof p.nama === 'string' ? p.nama : '',
+          kategori: typeof p.kategori === 'string' ? p.kategori : null,
         }))
         .filter((p) => p.id && p.nama);
     },
@@ -656,7 +789,17 @@ export default function TransactionsPage() {
       const response = await fetch(`${apiBaseUrl}/api/v1/barang`);
       const payload = await parseJsonSafe(response);
       if (!response.ok) throw new Error(getApiErrorMessage(payload, 'Gagal memuat data barang'));
-      return Array.isArray(payload) ? (payload as Barang[]) : [];
+      if (!Array.isArray(payload)) return [];
+      return (payload as Array<Record<string, unknown>>)
+        .map((b) => ({
+          kode: typeof b.kode === 'string' ? b.kode : '',
+          nama: typeof b.nama === 'string' ? b.nama : '',
+          ukuran: Array.isArray(b.ukuran) ? (b.ukuran as unknown[]).filter((v): v is string => typeof v === 'string') : [],
+          warna: Array.isArray(b.warna) ? (b.warna as unknown[]).filter((v): v is string => typeof v === 'string') : [],
+          hargaJual: typeof b.hargaJual === 'number' ? b.hargaJual : Number(b.hargaJual),
+          diskon: typeof b.diskon === 'number' ? b.diskon : Number(b.diskon),
+        }))
+        .filter((b) => b.kode && b.nama && Number.isFinite(b.hargaJual) && Number.isFinite(b.diskon));
     },
   });
 
@@ -671,14 +814,25 @@ export default function TransactionsPage() {
       if (!response.ok) throw new Error(getApiErrorMessage(payload, 'Gagal membuat transaksi'));
       return payload;
     },
-    onSuccess: async () => {
+    onSuccess: async (payload) => {
+      try {
+        const obj: Record<string, unknown> | null =
+          payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+        const invoice = typeof obj?.invoice === 'string' ? obj.invoice : '';
+        if (invoice.trim() && user?.name) {
+          localStorage.setItem(`velcrone:invoice_created_by:${invoice}`, user.name);
+        }
+      } catch {
+        void 0;
+      }
+
       toast.success('Transaksi berhasil dibuat');
       setCreateOpen(false);
       setCreateForm({
         customerId: 'umum',
         customerName: '',
         paymentMethod: 'cash',
-        items: [{ productId: 'pilih', ukuran: 'pilih', qty: '1', price: '' }],
+        items: [{ productId: 'pilih', ukuran: 'pilih', warna: 'pilih', qty: '1', price: '' }],
       });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['transaksi'] }),
@@ -764,7 +918,7 @@ export default function TransactionsPage() {
       customerId: 'umum',
       customerName: '',
       paymentMethod: 'cash',
-      items: [{ productId: 'pilih', ukuran: 'pilih', qty: '1', price: '' }],
+      items: [{ productId: 'pilih', ukuran: 'pilih', warna: 'pilih', qty: '1', price: '' }],
     });
   };
 
@@ -775,11 +929,23 @@ export default function TransactionsPage() {
       return;
     }
 
+    const missingWarna = computedItems.some((i) => {
+      if (!i.productId || i.productId === 'pilih') return false;
+      const info = getBarangInfo(i.productId);
+      if (!info || !Array.isArray(info.warna) || info.warna.length === 0) return false;
+      return !i.warna || i.warna === 'pilih';
+    });
+    if (missingWarna) {
+      toast.error('Warna wajib dipilih untuk setiap barang yang memiliki pilihan warna');
+      return;
+    }
+
     const itemsPayload = computedItems
       .filter((i) => i.productId && i.productId !== 'pilih' && i.ukuran && i.ukuran !== 'pilih' && i.qty > 0)
       .map((i) => ({
         productId: i.productId,
         ukuran: i.ukuran,
+        warna: i.warna && i.warna !== 'pilih' ? i.warna : null,
         qty: i.qty,
         price: i.price,
       }));
@@ -825,26 +991,61 @@ export default function TransactionsPage() {
           ) : pageData.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">Tidak ada data</div>
           ) : (
-            pageData.map(t => {
-              const sc = getStatusColor(t.status) || getStatusColor('pending');
-              return (
-                <div key={t.id} className="p-4 hover:bg-muted/30 cursor-pointer transition-colors" onClick={() => setSelected(t)}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {statusIcons[t.status] || statusIcons.pending}
-                      <div>
-                        <p className="font-medium text-foreground text-sm">{t.invoice}</p>
-                        <p className="text-xs text-muted-foreground">{t.date || '-'} • {t.customerName}</p>
+            <>
+              <div className="grid grid-cols-12 gap-3 p-3 bg-muted/50 text-xs font-medium text-muted-foreground">
+                <div className="col-span-4">No - Invoice</div>
+                <div className="col-span-3">Nama Pelanggan</div>
+                <div className="col-span-2">Status Produksi</div>
+                <div className="col-span-2">Status Pembayaran</div>
+                <div className="col-span-1 text-right">Total</div>
+              </div>
+              {pageData.map((t, idx) => {
+                const sc = getStatusColor(t.status) || getStatusColor('pending');
+                const pay = getPaymentBadge(t.paymentStatus);
+                const no = (page - 1) * perPage + idx + 1;
+                const spk = getSpkCompletionFromLocalStorage(t);
+                const spkLabel = spk.total ? `${spk.done}/${spk.total} Selesai` : '-';
+                return (
+                  <div
+                    key={t.id}
+                    className="grid grid-cols-12 gap-3 p-3 hover:bg-muted/30 cursor-pointer transition-colors items-center"
+                    onClick={() => setSelected(t)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') setSelected(t);
+                    }}
+                  >
+                    <div className="col-span-4 min-w-0">
+                      <div className="flex items-start gap-2 min-w-0">
+                        <div className="mt-0.5">{statusIcons[t.status] || statusIcons.pending}</div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-foreground text-sm truncate">
+                            {no}. {t.invoice}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{formatTimestampJakarta(t.date)}</p>
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="col-span-3 min-w-0">
+                      <p className="text-sm text-foreground truncate">{t.customerName || '-'}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <span className={`text-sm ${spk.total > 0 && spk.done === spk.total ? 'text-velcrone-success' : 'text-foreground'}`}>
+                        {spkLabel}
+                      </span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${pay.className}`}>{pay.label}</span>
+                    </div>
+                    <div className="col-span-1 text-right">
                       <p className="font-semibold text-foreground tabular-nums text-sm">{formatRupiah(t.total)}</p>
                       <span className={`text-xs px-2 py-0.5 rounded-full ${sc.bg} ${sc.text} font-medium capitalize`}>{t.status}</span>
                     </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              })}
+            </>
           )}
         </div>
         {totalPages > 1 && (
@@ -868,7 +1069,7 @@ export default function TransactionsPage() {
               <div className="flex justify-between items-start">
                 <div>
                   <p className="font-semibold text-foreground">{selected.invoice}</p>
-                  <p className="text-sm text-muted-foreground">{selected.date}</p>
+                  <p className="text-sm text-muted-foreground">{formatTimestampJakarta(selected.date)}</p>
                   <p className="text-sm text-muted-foreground">{selected.customerName}</p>
                 </div>
                 {statusIcons[selected.status]}
@@ -1108,12 +1309,12 @@ export default function TransactionsPage() {
       </Dialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="bg-card max-w-2xl">
+        <DialogContent className="bg-card w-full max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Tambah Transaksi</DialogTitle></DialogHeader>
           <div className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label>Pelanggan</Label>
+                <Label>Nama Pelanggan</Label>
                 <Select
                   value={createForm.customerId}
                   onValueChange={(value) => setCreateForm((f) => ({ ...f, customerId: value }))}
@@ -1139,13 +1340,26 @@ export default function TransactionsPage() {
               </div>
               <div className="space-y-3">
                 <div>
+                  <Label>Kategori</Label>
+                  <Input
+                    value={
+                      createForm.customerId !== 'umum'
+                        ? ((pelangganQuery.data || []).find((p) => p.id === createForm.customerId)?.kategori || '-')
+                        : '-'
+                    }
+                    className="mt-1"
+                    readOnly
+                  />
+                </div>
+                <div>
                   <Label>Metode Pembayaran</Label>
                   <Select value={createForm.paymentMethod} onValueChange={(value) => setCreateForm((f) => ({ ...f, paymentMethod: value }))}>
                     <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih metode" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cash">cash</SelectItem>
-                      <SelectItem value="transfer">transfer</SelectItem>
-                      <SelectItem value="qris">qris</SelectItem>
+                      <SelectItem value="transfer">Transfer</SelectItem>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="cicil">Cicil</SelectItem>
+                      <SelectItem value="qris">QRIS</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1154,9 +1368,10 @@ export default function TransactionsPage() {
 
             <div className="border rounded-lg overflow-hidden">
               <div className="grid grid-cols-12 gap-2 p-3 border-b bg-muted/50 text-xs font-medium text-muted-foreground">
-                <div className="col-span-5">Barang</div>
+                <div className="col-span-4">Barang</div>
+                <div className="col-span-2 text-right">Warna</div>
                 <div className="col-span-2 text-right">Ukuran</div>
-                <div className="col-span-2 text-right">Qty</div>
+                <div className="col-span-1 text-right">Qty</div>
                 <div className="col-span-2 text-right">Harga</div>
                 <div className="col-span-1"></div>
               </div>
@@ -1165,16 +1380,23 @@ export default function TransactionsPage() {
                   const info = getBarangInfo(row.productId);
                   return (
                     <div key={idx} className="grid grid-cols-12 gap-2 p-3 items-center">
-                      <div className="col-span-5">
+                      <div className="col-span-4">
                         <Select
                           value={row.productId}
                           onValueChange={(value) => {
                             const nextInfo = getBarangInfo(value);
+                            const defaultPrice = nextInfo ? nextInfo.hargaJual * (1 - nextInfo.diskon / 100) : 0;
                             setCreateForm((f) => ({
                               ...f,
                               items: f.items.map((it, i) =>
                                 i === idx
-                                  ? { ...it, productId: value, ukuran: nextInfo?.ukuran?.[0] || 'pilih' }
+                                  ? {
+                                      ...it,
+                                      productId: value,
+                                      ukuran: nextInfo?.ukuran?.[0] || 'pilih',
+                                      warna: nextInfo?.warna?.[0] || 'pilih',
+                                      price: nextInfo ? String(Math.max(0, Math.round(defaultPrice))) : '',
+                                    }
                                   : it
                               ),
                             }));
@@ -1191,6 +1413,26 @@ export default function TransactionsPage() {
                         {info && (
                           <p className="text-xs text-muted-foreground mt-1">{info.kode}</p>
                         )}
+                      </div>
+                      <div className="col-span-2">
+                        <Select
+                          value={row.warna}
+                          onValueChange={(value) => {
+                            setCreateForm((f) => ({
+                              ...f,
+                              items: f.items.map((it, i) => i === idx ? { ...it, warna: value } : it),
+                            }));
+                          }}
+                          disabled={!info || info.warna.length === 0}
+                        >
+                          <SelectTrigger className="text-right"><SelectValue placeholder="Warna" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pilih">Pilih</SelectItem>
+                            {(info?.warna || []).map((w) => (
+                              <SelectItem key={w} value={w}>{w}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className="col-span-2">
                         <Select
@@ -1212,7 +1454,7 @@ export default function TransactionsPage() {
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="col-span-2">
+                      <div className="col-span-1">
                         <Input
                           type="number"
                           value={row.qty}
@@ -1231,6 +1473,18 @@ export default function TransactionsPage() {
                             ...f,
                             items: f.items.map((it, i) => i === idx ? { ...it, price: e.target.value } : it),
                           }))}
+                          onBlur={() => {
+                            const info = getBarangInfo(row.productId);
+                            if (!info) return;
+                            if (row.price.trim() !== '') return;
+                            const defaultPrice = info.hargaJual * (1 - info.diskon / 100);
+                            setCreateForm((f) => ({
+                              ...f,
+                              items: f.items.map((it, i) =>
+                                i === idx ? { ...it, price: String(Math.max(0, Math.round(defaultPrice))) } : it
+                              ),
+                            }));
+                          }}
                           className="text-right"
                         />
                       </div>
@@ -1257,7 +1511,7 @@ export default function TransactionsPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setCreateForm((f) => ({ ...f, items: [...f.items, { productId: 'pilih', ukuran: 'pilih', qty: '1', price: '' }] }))}
+                  onClick={() => setCreateForm((f) => ({ ...f, items: [...f.items, { productId: 'pilih', ukuran: 'pilih', warna: 'pilih', qty: '1', price: '' }] }))}
                 >
                   <Plus size={16} className="mr-2" /> Tambah Item
                 </Button>

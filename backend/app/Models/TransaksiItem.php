@@ -14,6 +14,7 @@ class TransaksiItem extends Model
         'barang_kode',
         'barang_nama',
         'ukuran',
+        'warna',
         'qty',
         'harga',
         'subtotal',

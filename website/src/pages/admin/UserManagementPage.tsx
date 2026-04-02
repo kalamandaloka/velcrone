@@ -19,7 +19,20 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, Plus, Pencil, Trash2 } from 'lucide-react';
 
-const roles: UserRole[] = ['superadmin', 'owner', 'manager', 'kasir'];
+const roles: UserRole[] = [
+  'superadmin',
+  'owner',
+  'manager',
+  'kasir',
+  'design',
+  'setting',
+  'printing',
+  'heat press',
+  'sewing',
+  'qc',
+  'packing',
+  'delivery',
+];
 
 type UserRow = {
   id: number;
@@ -164,6 +177,14 @@ export default function UserManagementPage() {
     owner: 'bg-velcrone-info-light text-velcrone-info',
     manager: 'bg-velcrone-success-light text-velcrone-success',
     kasir: 'bg-muted text-muted-foreground',
+    design: 'bg-velcrone-warning-light text-velcrone-warning',
+    setting: 'bg-velcrone-warning-light text-velcrone-warning',
+    printing: 'bg-velcrone-warning-light text-velcrone-warning',
+    'heat press': 'bg-velcrone-warning-light text-velcrone-warning',
+    sewing: 'bg-velcrone-warning-light text-velcrone-warning',
+    qc: 'bg-velcrone-warning-light text-velcrone-warning',
+    packing: 'bg-velcrone-warning-light text-velcrone-warning',
+    delivery: 'bg-velcrone-warning-light text-velcrone-warning',
   };
 
   const openAdd = () => { setEditing(null); setForm({ name: '', email: '', role: 'kasir', status: 'active' }); setDialogOpen(true); };

@@ -1,5 +1,17 @@
 // ============ TYPES ============
-export type UserRole = 'superadmin' | 'owner' | 'manager' | 'kasir';
+export type UserRole =
+  | 'superadmin'
+  | 'owner'
+  | 'manager'
+  | 'kasir'
+  | 'design'
+  | 'setting'
+  | 'printing'
+  | 'heat press'
+  | 'sewing'
+  | 'qc'
+  | 'packing'
+  | 'delivery';
 export type TransactionStatus = 'pending' | 'completed' | 'cancelled';
 export type MaterialCategory = 'kain' | 'benang' | 'kancing' | 'zipper' | 'velcro' | 'label';
 export type ProductCategory = 'T-shirt' | 'Hoodie' | 'Jacket' | 'Hat' | 'Accessories';

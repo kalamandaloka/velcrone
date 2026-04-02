@@ -18,7 +18,18 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, Plus, Pencil, Trash2 } from 'lucide-react';
 
-type CustomerCategory = 'umum' | 'reseller' | 'vip';
+const CUSTOMER_CATEGORY_OPTIONS = [
+  'umum',
+  'reseller',
+  'vip',
+  'tiktok',
+  'tokopedia',
+  'shopee',
+  'instagram',
+  'website',
+  'marketplace',
+] as const;
+type CustomerCategory = (typeof CUSTOMER_CATEGORY_OPTIONS)[number];
 
 type Pelanggan = {
   id: string;
@@ -72,7 +83,15 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
 }
 
 function coerceCategory(value: unknown): CustomerCategory {
-  if (value === 'vip' || value === 'reseller' || value === 'umum') return value;
+  const raw = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+
+  const normalized = raw === 'markateplace' ? 'marketplace' : raw;
+  if ((CUSTOMER_CATEGORY_OPTIONS as readonly string[]).includes(normalized)) {
+    return normalized as CustomerCategory;
+  }
   return 'umum';
 }
 
@@ -359,6 +378,12 @@ export default function CustomersPage() {
     vip: 'bg-velcrone-warning-light text-velcrone-warning',
     reseller: 'bg-velcrone-info-light text-velcrone-info',
     umum: 'bg-muted text-muted-foreground',
+    tiktok: 'bg-velcrone-info-light text-velcrone-info',
+    tokopedia: 'bg-velcrone-info-light text-velcrone-info',
+    shopee: 'bg-velcrone-info-light text-velcrone-info',
+    instagram: 'bg-velcrone-info-light text-velcrone-info',
+    website: 'bg-velcrone-info-light text-velcrone-info',
+    marketplace: 'bg-velcrone-info-light text-velcrone-info',
   };
 
   return (
@@ -625,6 +650,12 @@ export default function CustomersPage() {
                       <SelectItem value="umum">Umum</SelectItem>
                       <SelectItem value="reseller">Reseller</SelectItem>
                       <SelectItem value="vip">VIP</SelectItem>
+                      <SelectItem value="tiktok">Tiktok</SelectItem>
+                      <SelectItem value="tokopedia">Tokopedia</SelectItem>
+                      <SelectItem value="shopee">Shopee</SelectItem>
+                      <SelectItem value="instagram">Instagram</SelectItem>
+                      <SelectItem value="website">Website</SelectItem>
+                      <SelectItem value="marketplace">Marketplace</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

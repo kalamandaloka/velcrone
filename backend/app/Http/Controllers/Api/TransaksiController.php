@@ -17,6 +17,7 @@ use Illuminate\Validation\Rule;
 class TransaksiController extends Controller
 {
     private const UKURAN_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
+    private const PAYMENT_METHODS = ['transfer', 'cash', 'cicil', 'qris'];
     private const PRODUCTION_STATUSES = [
         'order_masuk',
         'quotation',
@@ -135,7 +136,8 @@ class TransaksiController extends Controller
                 return [
                     'id' => (string) $t->id,
                     'invoice' => (string) $t->invoice,
-                    'date' => $t->tanggal ? $t->tanggal->format('Y-m-d H:i') : null,
+                    'spkNumber' => $t->nomor_spk ? (string) $t->nomor_spk : null,
+                    'date' => $t->tanggal ? $t->tanggal->setTimezone('Asia/Jakarta')->format('Y-m-d H:i') : null,
                     'customerId' => $t->pelanggan_id ? (string) $t->pelanggan_id : '',
                     'customerName' => $t->pelanggan_nama ? (string) $t->pelanggan_nama : 'Umum',
                     'items' => $t->items->map(function (TransaksiItem $item) {
@@ -143,6 +145,7 @@ class TransaksiController extends Controller
                             'productId' => (string) $item->barang_kode,
                             'productName' => (string) $item->barang_nama,
                             'ukuran' => $item->ukuran ? (string) $item->ukuran : '',
+                            'warna' => $item->warna ? (string) $item->warna : '',
                             'qty' => (int) $item->qty,
                             'price' => (float) $item->harga,
                             'subtotal' => (float) $item->subtotal,
@@ -182,7 +185,8 @@ class TransaksiController extends Controller
         return response()->json([
             'id' => (string) $t->id,
             'invoice' => (string) $t->invoice,
-            'date' => $t->tanggal ? $t->tanggal->format('Y-m-d H:i') : null,
+            'spkNumber' => $t->nomor_spk ? (string) $t->nomor_spk : null,
+            'date' => $t->tanggal ? $t->tanggal->setTimezone('Asia/Jakarta')->format('Y-m-d H:i') : null,
             'customerId' => $t->pelanggan_id ? (string) $t->pelanggan_id : '',
             'customerName' => $t->pelanggan_nama ? (string) $t->pelanggan_nama : 'Umum',
             'items' => $t->items->map(function (TransaksiItem $item) {
@@ -190,6 +194,7 @@ class TransaksiController extends Controller
                     'productId' => (string) $item->barang_kode,
                     'productName' => (string) $item->barang_nama,
                     'ukuran' => $item->ukuran ? (string) $item->ukuran : '',
+                    'warna' => $item->warna ? (string) $item->warna : '',
                     'qty' => (int) $item->qty,
                     'price' => (float) $item->harga,
                     'subtotal' => (float) $item->subtotal,
@@ -220,9 +225,10 @@ class TransaksiController extends Controller
             'items' => ['required', 'array', 'min:1'],
             'items.*.productId' => ['required', 'string'],
             'items.*.ukuran' => ['required', 'string', Rule::in(self::UKURAN_OPTIONS)],
+            'items.*.warna' => ['nullable', 'string', 'max:50'],
             'items.*.qty' => ['required', 'integer', 'min:1'],
             'items.*.price' => ['nullable', 'numeric', 'min:0'],
-            'paymentMethod' => ['required', 'string'],
+            'paymentMethod' => ['required', 'string', Rule::in(self::PAYMENT_METHODS)],
         ]);
 
         $tanggal = array_key_exists('date', $validated)
@@ -270,6 +276,8 @@ class TransaksiController extends Controller
             foreach ($validated['items'] as $row) {
                 $kode = (string) $row['productId'];
                 $ukuran = strtoupper(trim((string) $row['ukuran']));
+                $warna = array_key_exists('warna', $row) ? trim((string) $row['warna']) : '';
+                if ($warna === '' || strtolower($warna) === 'pilih') $warna = '';
                 $qty = (int) $row['qty'];
                 $barang = Barang::find($kode);
                 if (! $barang) {
@@ -277,6 +285,9 @@ class TransaksiController extends Controller
                 }
                 if (! $this->ukuranIsAvailable($barang->ukuran, $ukuran)) {
                     return response()->json(['message' => "Ukuran tidak tersedia untuk {$kode}: {$ukuran}"], 422);
+                }
+                if ($warna !== '' && ! $this->warnaIsAvailable($barang->warna, $warna)) {
+                    return response()->json(['message' => "Warna tidak tersedia untuk {$kode}: {$warna}"], 422);
                 }
 
                 $hargaDefault = (float) $barang->harga_jual * (1 - ((float) $barang->diskon / 100));
@@ -288,6 +299,7 @@ class TransaksiController extends Controller
                     'barang_kode' => $barang->kode,
                     'barang_nama' => $barang->nama,
                     'ukuran' => $ukuran,
+                    'warna' => $warna !== '' ? $warna : null,
                     'qty' => $qty,
                     'harga' => $harga,
                     'subtotal' => $subtotal,
@@ -314,6 +326,7 @@ class TransaksiController extends Controller
             'status' => ['sometimes', Rule::in(['cancelled'])],
             'cancelReason' => ['required_with:status', 'string', 'max:255'],
             'paymentMethod' => ['sometimes', 'string'],
+            'spkNumber' => ['sometimes', 'nullable', 'string', 'max:50'],
             'productionStatus' => ['sometimes', Rule::in(self::PRODUCTION_STATUSES)],
             'productionDate' => ['required_with:productionStatus', 'date'],
             'paymentStatus' => ['sometimes', Rule::in(['belum_lunas', 'lunas'])],
@@ -389,6 +402,9 @@ class TransaksiController extends Controller
                 'metode_pembayaran' => array_key_exists('paymentMethod', $validated)
                     ? (string) $validated['paymentMethod']
                     : $transaksi->metode_pembayaran,
+                'nomor_spk' => array_key_exists('spkNumber', $validated)
+                    ? (($validated['spkNumber'] !== null && trim((string) $validated['spkNumber']) !== '') ? trim((string) $validated['spkNumber']) : null)
+                    : $transaksi->nomor_spk,
                 'status_produksi' => $productionStatus,
                 'produksi_detail' => $productionDetails,
                 'pembayaran_ke' => array_key_exists('payment', $validated)
@@ -404,14 +420,16 @@ class TransaksiController extends Controller
 
     private function generateInvoice(Carbon $tanggal): string
     {
-        $prefix = 'INV/'.$tanggal->format('Ymd').'/';
-        $sequence = (int) Transaksi::query()->whereDate('tanggal', $tanggal->toDateString())->count() + 1;
+        $tanggalJakarta = $tanggal->copy()->setTimezone('Asia/Jakarta');
+        $bulan = $tanggalJakarta->format('m');
+        $tahun = $tanggalJakarta->format('Y');
 
         while (true) {
-            $invoice = $prefix.str_pad((string) $sequence, 3, '0', STR_PAD_LEFT);
+            $no = (string) random_int(100, 999);
+            $trx = str_pad((string) random_int(0, 999), 3, '0', STR_PAD_LEFT);
+            $invoice = "{$no}/VLC/TRX-{$trx}/{$bulan}/{$tahun}";
             $exists = Transaksi::query()->where('invoice', $invoice)->exists();
             if (! $exists) return $invoice;
-            $sequence++;
         }
     }
 
@@ -422,6 +440,16 @@ class TransaksiController extends Controller
         $raw = strtoupper(trim((string) $barangUkuran));
         if ($raw === '') return false;
         $parts = preg_split('/\s*,\s*/', $raw) ?: [];
+        return in_array($selected, $parts, true);
+    }
+
+    private function warnaIsAvailable(?string $barangWarna, string $selected): bool
+    {
+        $selected = strtoupper(trim($selected));
+        if ($selected === '') return false;
+        $raw = strtoupper(trim((string) $barangWarna));
+        if ($raw === '') return false;
+        $parts = array_values(array_filter(preg_split('/\s*,\s*/', $raw) ?: []));
         return in_array($selected, $parts, true);
     }
 }

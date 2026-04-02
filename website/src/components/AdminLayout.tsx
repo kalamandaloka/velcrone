@@ -2,7 +2,7 @@ import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import {
   LayoutDashboard, Package, Layers, Truck, Users, Receipt,
-  BarChart3, Settings, UserCog, LogOut, Menu, X, Bell, Search, Tags
+  BarChart3, Settings, UserCog, LogOut, Menu, X, Bell, Search, Tags, ClipboardList, FileText
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -19,15 +19,17 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Menu' },
+  { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir', 'design', 'setting', 'printing', 'heat press', 'sewing', 'qc', 'packing', 'delivery'], group: 'Menu' },
   { label: 'Data Barang', path: '/dashboard/products', icon: <Package size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Inventory' },
   { label: 'Kategori Barang', path: '/dashboard/categories', icon: <Tags size={20} />, roles: ['superadmin', 'owner', 'manager'], group: 'Inventory' },
   { label: 'Stok Bahan', path: '/dashboard/raw-materials', icon: <Layers size={20} />, roles: ['superadmin', 'owner', 'manager'], group: 'Inventory' },
   { label: 'Data Pemasok', path: '/dashboard/suppliers', icon: <Truck size={20} />, roles: ['superadmin', 'owner', 'manager'], group: 'Inventory' },
   { label: 'Data Pelanggan', path: '/dashboard/customers', icon: <Users size={20} />, roles: ['superadmin', 'kasir'], group: 'Sales' },
-  { label: 'List Transaksi', path: '/dashboard/transactions', icon: <Receipt size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Sales' },
-  { label: 'Status Produksi', path: '/dashboard/transactions/produksi', icon: <Receipt size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Sales' },
+  { label: 'Transaksi', path: '/dashboard/transactions', icon: <Receipt size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Sales' },
   { label: 'Status Pembayaran', path: '/dashboard/transactions/pembayaran', icon: <Receipt size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir'], group: 'Sales' },
+  { label: 'List SPK', path: '/dashboard/produksi/spk', icon: <ClipboardList size={20} />, roles: ['superadmin', 'owner', 'manager'], group: 'Produksi' },
+  { label: 'Status Produksi', path: '/dashboard/produksi/status', icon: <Receipt size={20} />, roles: ['superadmin', 'owner', 'manager', 'kasir', 'design', 'setting', 'printing', 'heat press', 'sewing', 'qc', 'packing', 'delivery'], group: 'Produksi' },
+  { label: 'Dokumen', path: '/dashboard/produksi/dokumen', icon: <FileText size={20} />, roles: ['superadmin', 'owner', 'manager'], group: 'Produksi' },
   { label: 'Laporan', path: '/dashboard/reports', icon: <BarChart3 size={20} />, roles: ['superadmin', 'owner'], group: 'Management' },
   { label: 'User Management', path: '/dashboard/users', icon: <UserCog size={20} />, roles: ['superadmin'], group: 'Management' },
   { label: 'Settings', path: '/dashboard/settings', icon: <Settings size={20} />, roles: ['superadmin'], group: 'Management' },
@@ -60,7 +62,7 @@ export default function AdminLayout() {
             <X size={20} />
           </button>
         </div>
-        <nav className="p-4 space-y-6 overflow-y-auto h-[calc(100vh-8rem)]">
+        <nav className="p-4 space-y-6 overflow-y-auto scrollbar-hidden h-[calc(100vh-8rem)]">
           {groups.map(group => (
             <div key={group}>
               <p className="text-xs font-medium text-sidebar-foreground/50 uppercase tracking-wider mb-2 px-3">{group}</p>

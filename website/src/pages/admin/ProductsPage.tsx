@@ -23,15 +23,35 @@ import * as XLSX from 'xlsx';
 const UKURAN_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL'] as const;
 type Ukuran = (typeof UKURAN_OPTIONS)[number];
 
+const JENIS_OPTIONS = ['Atasan', 'Pants'] as const;
+type Jenis = (typeof JENIS_OPTIONS)[number];
+
+const DEFAULT_WARNA_OPTIONS = ['hitam', 'merah', 'putih', 'kuning'] as const;
+type Warna = string;
+
 type Barang = {
   kode: string;
   nama: string;
   kategori: string | null;
+  jenis: Jenis[];
   ukuran: Ukuran[];
+  warna: Warna[];
   hargaBeli: number;
   hargaJual: number;
   diskon: number;
 };
+
+type BarangCreateBody = Omit<Barang, 'warna'> & { warna?: Warna[]; jenis?: Jenis[] | null };
+type BarangUpdateBody = Partial<{
+  nama: string;
+  kategori: string | null;
+  jenis: Jenis[] | null;
+  ukuran: Ukuran[];
+  warna: Warna[] | null;
+  hargaBeli: number;
+  hargaJual: number;
+  diskon: number;
+}>;
 
 type KategoriBarang = {
   id: number;
@@ -107,7 +127,10 @@ export default function ProductsPage() {
     code: '',
     name: '',
     category: '',
+    jenis: [] as Jenis[],
     sizes: ['M'] as Ukuran[],
+    colors: [] as Warna[],
+    newColor: '',
     buyPrice: '',
     sellPrice: '',
     discount: '0',
@@ -128,6 +151,20 @@ export default function ProductsPage() {
       return rows.map((row) => {
         const obj: Record<string, unknown> = row && typeof row === 'object' ? (row as Record<string, unknown>) : {};
         const kategori = typeof obj.kategori === 'string' ? obj.kategori : null;
+        const jenisValues: string[] = Array.isArray(obj.jenis)
+          ? obj.jenis.map((v) => String(v).trim())
+          : String(obj.jenis ?? '')
+              .split(',')
+              .map((v) => v.trim())
+              .filter(Boolean);
+        const jenis = Array.from(
+          new Set(
+            jenisValues
+              .map((v) => v.trim().toLowerCase())
+              .map((v) => (v === 'atasan' ? 'Atasan' : v === 'pants' ? 'Pants' : ''))
+              .filter((v): v is Jenis => (JENIS_OPTIONS as readonly string[]).includes(v)),
+          ),
+        );
         const ukuranValues: string[] = Array.isArray(obj.ukuran)
           ? obj.ukuran.map((v) => String(v).trim().toUpperCase())
           : String(obj.ukuran ?? '')
@@ -135,11 +172,22 @@ export default function ProductsPage() {
               .map((v) => v.trim().toUpperCase())
               .filter(Boolean);
         const ukuran = ukuranValues.filter((s): s is Ukuran => (UKURAN_OPTIONS as readonly string[]).includes(s));
+
+        const warnaValues: string[] = Array.isArray(obj.warna)
+          ? obj.warna.map((v) => String(v).trim().toLowerCase())
+          : String(obj.warna ?? '')
+              .split(',')
+              .map((v) => v.trim().toLowerCase())
+              .filter(Boolean);
+        const warnaUnique = Array.from(new Set(warnaValues));
+
         return {
           kode: String(obj.kode ?? ''),
           nama: String(obj.nama ?? ''),
           kategori,
+          jenis,
           ukuran: ukuran.length ? ukuran : ['M'],
+          warna: warnaUnique,
           hargaBeli: Number(obj.hargaBeli ?? 0),
           hargaJual: Number(obj.hargaJual ?? 0),
           diskon: Number(obj.diskon ?? 0),
@@ -159,7 +207,7 @@ export default function ProductsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (body: Barang) => {
+    mutationFn: async (body: BarangCreateBody) => {
       const response = await fetch(`${apiBaseUrl}/api/v1/barang`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -180,7 +228,7 @@ export default function ProductsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ kode, body }: { kode: string; body: Partial<Omit<Barang, 'kode'>> }) => {
+    mutationFn: async ({ kode, body }: { kode: string; body: BarangUpdateBody }) => {
       const response = await fetch(`${apiBaseUrl}/api/v1/barang/${encodeURIComponent(kode)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -230,7 +278,7 @@ export default function ProductsPage() {
 
   const openAdd = () => {
     setEditing(null);
-    setForm({ code: '', name: '', category: '', sizes: ['M'], buyPrice: '', sellPrice: '', discount: '0' });
+    setForm({ code: '', name: '', category: '', jenis: [], sizes: ['M'], colors: [], newColor: '', buyPrice: '', sellPrice: '', discount: '0' });
     setDialogOpen(true);
   };
 
@@ -240,12 +288,32 @@ export default function ProductsPage() {
       code: p.kode,
       name: p.nama,
       category: p.kategori || '',
+      jenis: Array.isArray(p.jenis) ? p.jenis : [],
       sizes: Array.isArray(p.ukuran) && p.ukuran.length ? p.ukuran : ['M'],
+      colors: Array.isArray(p.warna) ? p.warna : [],
+      newColor: '',
       buyPrice: String(p.hargaBeli),
       sellPrice: String(p.hargaJual),
       discount: String(p.diskon),
     });
     setDialogOpen(true);
+  };
+
+  const warnaOptions = Array.from(
+    new Set([
+      ...DEFAULT_WARNA_OPTIONS,
+      ...(listQuery.data || []).flatMap((b) => b.warna || []),
+    ].map((v) => String(v).trim().toLowerCase()).filter(Boolean)),
+  );
+
+  const addNewColor = () => {
+    const raw = form.newColor.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!raw) return;
+    setForm((f) => ({
+      ...f,
+      colors: Array.from(new Set([...f.colors, raw])),
+      newColor: '',
+    }));
   };
 
   const handleSave = async () => {
@@ -277,7 +345,9 @@ export default function ProductsPage() {
       kode: form.code.trim(),
       nama: form.name.trim(),
       kategori: form.category.trim() ? form.category.trim() : null,
+      jenis: Array.from(new Set((form.jenis || []).filter((j): j is Jenis => JENIS_OPTIONS.includes(j)))),
       ukuran: sizes,
+      warna: Array.from(new Set((form.colors || []).map((c) => c.trim().toLowerCase()).filter(Boolean))),
       hargaBeli,
       hargaJual,
       diskon,
@@ -289,14 +359,22 @@ export default function ProductsPage() {
         body: {
           nama: parsed.nama,
           kategori: parsed.kategori,
+          jenis: parsed.jenis.length ? parsed.jenis : null,
           ukuran: parsed.ukuran,
+          warna: parsed.warna.length ? parsed.warna : null,
           hargaBeli: parsed.hargaBeli,
           hargaJual: parsed.hargaJual,
           diskon: parsed.diskon,
         },
       });
     } else {
-      await createMutation.mutateAsync(parsed);
+      const { warna, ...rest } = parsed;
+      const body: BarangCreateBody = {
+        ...rest,
+        ...(warna.length ? { warna } : {}),
+        jenis: parsed.jenis.length ? parsed.jenis : null,
+      };
+      await createMutation.mutateAsync(body);
     }
   };
 
@@ -310,7 +388,9 @@ export default function ProductsPage() {
         kode: 'VLC-001',
         nama: 'Nama Produk',
         kategori: 'Kategori (opsional)',
+        jenis: 'Atasan',
         ukuran: 'M',
+        warna: 'hitam, merah',
         hargaBeli: 0,
         hargaJual: 0,
         diskon: 0,
@@ -318,7 +398,7 @@ export default function ProductsPage() {
     ];
 
     const ws = XLSX.utils.json_to_sheet(rows, {
-      header: ['kode', 'nama', 'kategori', 'ukuran', 'hargaBeli', 'hargaJual', 'diskon'],
+      header: ['kode', 'nama', 'kategori', 'jenis', 'ukuran', 'warna', 'hargaBeli', 'hargaJual', 'diskon'],
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'template');
@@ -330,14 +410,16 @@ export default function ProductsPage() {
       kode: p.kode,
       nama: p.nama,
       kategori: p.kategori || '',
+      jenis: (p.jenis || []).join(', '),
       ukuran: p.ukuran.join(', '),
+      warna: (p.warna || []).join(', '),
       hargaBeli: p.hargaBeli,
       hargaJual: p.hargaJual,
       diskon: p.diskon,
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows, {
-      header: ['kode', 'nama', 'kategori', 'ukuran', 'hargaBeli', 'hargaJual', 'diskon'],
+      header: ['kode', 'nama', 'kategori', 'jenis', 'ukuran', 'warna', 'hargaBeli', 'hargaJual', 'diskon'],
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'produk');
@@ -382,12 +464,31 @@ export default function ProductsPage() {
         ).trim();
         const kategoriRaw = coerceExcelString(normalized.kategori ?? normalized.category).trim();
         const kategori = kategoriRaw ? kategoriRaw : null;
+        const jenisCell = coerceExcelString(normalized.jenis ?? normalized.type ?? normalized.jenis_produk).trim().toLowerCase();
+        const jenis = Array.from(
+          new Set(
+            jenisCell
+              .split(',')
+              .map((s) => s.trim().toLowerCase())
+              .map((v) => (v === 'atasan' ? 'Atasan' : v === 'pants' ? 'Pants' : ''))
+              .filter((v): v is Jenis => (JENIS_OPTIONS as readonly string[]).includes(v)),
+          ),
+        );
         const ukuranCell = coerceExcelString(normalized.ukuran ?? normalized.size).trim().toUpperCase();
         const ukuranParts = ukuranCell
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
         const ukuran = ukuranParts.filter((s): s is Ukuran => (UKURAN_OPTIONS as readonly string[]).includes(s));
+        const warnaCell = coerceExcelString(normalized.warna ?? normalized.color ?? normalized.colors).trim().toLowerCase();
+        const warna = Array.from(
+          new Set(
+            warnaCell
+              .split(',')
+              .map((s) => s.trim().toLowerCase())
+              .filter(Boolean),
+          ),
+        );
         const hargaBeli = coerceExcelNumber(normalized.hargabeli ?? normalized.harga_beli ?? normalized.buyprice, 0);
         const hargaJual = coerceExcelNumber(normalized.hargajual ?? normalized.harga_jual ?? normalized.sellprice, 0);
         const diskon = coerceExcelNumber(normalized.diskon ?? normalized.discount, 0);
@@ -407,7 +508,9 @@ export default function ProductsPage() {
           kode,
           nama,
           kategori,
+          jenis,
           ukuran,
+          warna,
           hargaBeli,
           hargaJual,
           diskon,
@@ -422,7 +525,9 @@ export default function ProductsPage() {
               body: JSON.stringify({
                 nama: payload.nama,
                 kategori: payload.kategori,
+                jenis: payload.jenis.length ? payload.jenis : null,
                 ukuran: payload.ukuran,
+                warna: payload.warna.length ? payload.warna : null,
                 hargaBeli: payload.hargaBeli,
                 hargaJual: payload.hargaJual,
                 diskon: payload.diskon,
@@ -431,10 +536,16 @@ export default function ProductsPage() {
             const responsePayload = await parseJsonSafe(response);
             if (!response.ok) throw new Error(getApiErrorMessage(responsePayload, 'Gagal update'));
           } else {
+            const { warna, ...rest } = payload;
+            const body: BarangCreateBody = {
+              ...rest,
+              ...(warna.length ? { warna } : {}),
+              jenis: payload.jenis.length ? payload.jenis : null,
+            };
             const response = await fetch(`${apiBaseUrl}/api/v1/barang`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
+              body: JSON.stringify(body),
             });
             const responsePayload = await parseJsonSafe(response);
             if (!response.ok) throw new Error(getApiErrorMessage(responsePayload, 'Gagal tambah'));
@@ -521,7 +632,9 @@ export default function ProductsPage() {
                 <th className="text-left p-3 font-medium text-muted-foreground">Kode</th>
                 <th className="text-left p-3 font-medium text-muted-foreground">Nama</th>
                 <th className="text-left p-3 font-medium text-muted-foreground">Kategori</th>
+                <th className="text-left p-3 font-medium text-muted-foreground">Jenis</th>
                 <th className="text-center p-3 font-medium text-muted-foreground">Ukuran</th>
+                <th className="text-left p-3 font-medium text-muted-foreground">Warna</th>
                 <th className="text-right p-3 font-medium text-muted-foreground">Harga Produksi</th>
                 <th className="text-right p-3 font-medium text-muted-foreground">Harga Jual</th>
                 <th className="text-right p-3 font-medium text-muted-foreground">Diskon</th>
@@ -530,18 +643,20 @@ export default function ProductsPage() {
             </thead>
             <tbody>
               {listQuery.isLoading ? (
-                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Memuat data...</td></tr>
+                <tr><td colSpan={10} className="p-6 text-center text-muted-foreground">Memuat data...</td></tr>
               ) : listQuery.isError ? (
-                <tr><td colSpan={8} className="p-6 text-center text-destructive">{listQuery.error instanceof Error ? listQuery.error.message : 'Gagal memuat data barang'}</td></tr>
+                <tr><td colSpan={10} className="p-6 text-center text-destructive">{listQuery.error instanceof Error ? listQuery.error.message : 'Gagal memuat data barang'}</td></tr>
               ) : pageData.length === 0 ? (
-                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Tidak ada data</td></tr>
+                <tr><td colSpan={10} className="p-6 text-center text-muted-foreground">Tidak ada data</td></tr>
               ) : (
                 pageData.map(p => (
                   <tr key={p.kode} className="border-b hover:bg-muted/30 transition-colors">
                     <td className="p-3 font-mono text-xs text-muted-foreground">{p.kode}</td>
                     <td className="p-3 font-medium text-foreground">{p.nama}</td>
                     <td className="p-3 text-muted-foreground">{p.kategori || '-'}</td>
+                    <td className="p-3 text-muted-foreground">{p.jenis.length ? p.jenis.join(', ') : '-'}</td>
                     <td className="p-3 text-center tabular-nums">{p.ukuran.join(', ')}</td>
+                    <td className="p-3 text-muted-foreground capitalize">{p.warna.length ? p.warna.join(', ') : '-'}</td>
                     <td className="p-3 text-right tabular-nums">{formatRupiah(p.hargaBeli)}</td>
                     <td className="p-3 text-right tabular-nums">{formatRupiah(p.hargaJual)}</td>
                     <td className="p-3 text-right tabular-nums">{p.diskon}%</td>
@@ -587,6 +702,31 @@ export default function ProductsPage() {
               </datalist>
             </div>
             <div>
+              <Label>Jenis</Label>
+              <div className="mt-2 flex flex-wrap gap-4">
+                {JENIS_OPTIONS.map((j) => {
+                  const checked = form.jenis.includes(j);
+                  return (
+                    <label key={j} className="flex items-center gap-2 text-sm text-foreground">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(v) => {
+                          const nextChecked = v === true;
+                          setForm((f) => ({
+                            ...f,
+                            jenis: nextChecked
+                              ? Array.from(new Set([...f.jenis, j]))
+                              : f.jenis.filter((x) => x !== j),
+                          }));
+                        }}
+                      />
+                      <span>{j}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
               <Label>Ukuran</Label>
               <div className="mt-2 flex flex-wrap gap-4">
                 {UKURAN_OPTIONS.map((s) => {
@@ -609,6 +749,45 @@ export default function ProductsPage() {
                     </label>
                   );
                 })}
+              </div>
+            </div>
+            <div>
+              <Label>Warna</Label>
+              <div className="mt-2 flex flex-wrap gap-4">
+                {warnaOptions.map((c) => {
+                  const checked = form.colors.includes(c);
+                  return (
+                    <label key={c} className="flex items-center gap-2 text-sm text-foreground">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(v) => {
+                          const nextChecked = v === true;
+                          setForm((f) => ({
+                            ...f,
+                            colors: nextChecked
+                              ? Array.from(new Set([...f.colors, c]))
+                              : f.colors.filter((x) => x !== c),
+                          }));
+                        }}
+                      />
+                      <span className="capitalize">{c}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex gap-2">
+                <Input
+                  value={form.newColor}
+                  onChange={(e) => setForm((f) => ({ ...f, newColor: e.target.value }))}
+                  placeholder="Tambah warna (mis. navy)"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addNewColor();
+                    }
+                  }}
+                />
+                <Button variant="outline" onClick={addNewColor}>Tambah</Button>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">

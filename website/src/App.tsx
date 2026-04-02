@@ -25,6 +25,8 @@ import CustomersPage from "./pages/admin/CustomersPage";
 import TransactionsPage from "./pages/admin/TransactionsPage";
 import ProductionStatusPage from "./pages/admin/ProductionStatusPage";
 import PaymentStatusPage from "./pages/admin/PaymentStatusPage";
+import ListSpkPage from "./pages/admin/ListSpkPage";
+import ProductionDocumentsPage from "./pages/admin/ProductionDocumentsPage";
 import ReportsPage from "./pages/admin/ReportsPage";
 import UserManagementPage from "./pages/admin/UserManagementPage";
 import SettingsPage from "./pages/admin/SettingsPage";
@@ -63,6 +65,9 @@ const App = () => (
                 <Route path="transactions" element={<TransactionsPage />} />
                 <Route path="transactions/produksi" element={<ProductionStatusPage />} />
                 <Route path="transactions/pembayaran" element={<PaymentStatusPage />} />
+                <Route path="produksi/spk" element={<ProtectedRoute allowedRoles={['superadmin', 'owner', 'manager']}><ListSpkPage /></ProtectedRoute>} />
+                <Route path="produksi/status" element={<ProductionStatusPage />} />
+                <Route path="produksi/dokumen" element={<ProtectedRoute allowedRoles={['superadmin', 'owner', 'manager']}><ProductionDocumentsPage /></ProtectedRoute>} />
                 <Route path="reports" element={<ProtectedRoute allowedRoles={['superadmin', 'owner']}><ReportsPage /></ProtectedRoute>} />
                 <Route path="users" element={<ProtectedRoute allowedRoles={['superadmin']}><UserManagementPage /></ProtectedRoute>} />
                 <Route path="settings" element={<ProtectedRoute allowedRoles={['superadmin']}><SettingsPage /></ProtectedRoute>} />

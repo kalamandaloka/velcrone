@@ -43,11 +43,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: 'Response login tidak valid' };
       }
 
+      const rawRole = String(apiUser.role);
+      const knownRoles: UserRole[] = [
+        'superadmin',
+        'owner',
+        'manager',
+        'kasir',
+        'design',
+        'setting',
+        'printing',
+        'heat press',
+        'sewing',
+        'qc',
+        'packing',
+        'delivery',
+      ];
+
       const role: UserRole | null =
-        apiUser.role === 'administrator'
+        rawRole === 'administrator'
           ? 'superadmin'
-          : ['superadmin', 'owner', 'manager', 'kasir'].includes(apiUser.role)
-            ? apiUser.role
+          : (knownRoles as readonly string[]).includes(rawRole)
+            ? (rawRole as UserRole)
             : null;
 
       if (!role) {

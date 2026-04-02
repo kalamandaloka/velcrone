@@ -1,12 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/components/ui/sonner';
-import { Search, Pencil } from 'lucide-react';
+import { Search } from 'lucide-react';
 
 type ProductionStatus =
   | 'order_masuk'
@@ -25,31 +23,71 @@ type ProductionStatus =
   | 'diterima_konsumen'
   | 'selesai';
 
+type TransaksiStatus = 'pending' | 'completed' | 'cancelled';
+
+type TransaksiItem = {
+  productId: string;
+  productName: string;
+  ukuran: string;
+  warna: string;
+  qty: number;
+  price: number;
+  subtotal: number;
+};
+
+type BarangRow = {
+  kode: string;
+  kategori: string | null;
+  jenis: string[];
+};
+
 type TransaksiRow = {
   id: string;
   invoice: string;
   date: string | null;
   customerName: string;
+  status: TransaksiStatus;
   productionStatus: ProductionStatus;
+  spkDetail: SpkDetailMap;
+  items: TransaksiItem[];
 };
 
-const productionOptions: Array<{ value: ProductionStatus; label: string }> = [
-  { value: 'order_masuk', label: 'Order Masuk' },
-  { value: 'quotation', label: 'Quotation' },
-  { value: 'persetujuan_desain', label: 'Persetujuan Desain' },
-  { value: 'sampel', label: 'Sampel (Opsional)' },
-  { value: 'pembelian_material', label: 'Pembelian Material' },
-  { value: 'pembuatan_pola', label: 'Pembuatan Pola' },
-  { value: 'cutting', label: 'Cutting' },
-  { value: 'print_bordir', label: 'Print/Bordir' },
-  { value: 'sewing', label: 'Sewing' },
-  { value: 'finishing', label: 'Finishing' },
-  { value: 'qc', label: 'QC' },
-  { value: 'packing', label: 'Packing' },
-  { value: 'shipping', label: 'Shipping' },
-  { value: 'diterima_konsumen', label: 'Diterima Konsumen' },
-  { value: 'selesai', label: 'Selesai' },
-];
+const SPK_STEP_OPTIONS = ['DESIGN', 'SETTING', 'PRINTING', 'HEAT PRESS', 'SEWING', 'QC', 'PACKING', 'DELIVERY', 'SELESAI'] as const;
+type SpkStepStatus = (typeof SPK_STEP_OPTIONS)[number];
+
+const KANBAN_STAGES = ['ORDER', 'DESIGN', 'SETTING', 'PRINTING', 'HEAT PRESS', 'SEWING', 'QC', 'PACKING', 'DELIVERY', 'SELESAI'] as const;
+type KanbanStage = (typeof KANBAN_STAGES)[number];
+
+type RawSpkRow = {
+  id: string;
+  transaksiId: string;
+  spkNumber: string;
+  invoice: string;
+  orderDate: string | null;
+  customerName: string;
+  kategoriProduk: string | null;
+  productId: string;
+  productName: string;
+  warnaProduk: string | null;
+  jenisProduk: string[];
+  qty: number;
+  sizes: { size: string; qty: number }[];
+  status: TransaksiStatus;
+  productionStatus: ProductionStatus;
+  spkDetail: SpkDetailMap;
+};
+
+type SpkRowView = RawSpkRow & {
+  deadlineDate: string | null;
+  stage: KanbanStage;
+};
+
+type SpkDetailEntry = {
+  stepStatus: string | null;
+  deadlineDate: string | null;
+};
+
+type SpkDetailMap = Record<string, SpkDetailEntry>;
 
 async function parseJsonSafe(response: Response) {
   try {
@@ -80,14 +118,66 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
 
 function coerceProductionStatus(value: unknown): ProductionStatus {
   const v = typeof value === 'string' ? value : '';
-  const found = productionOptions.find((o) => o.value === v);
-  return found ? found.value : 'order_masuk';
+  const allowed: ProductionStatus[] = [
+    'order_masuk',
+    'quotation',
+    'persetujuan_desain',
+    'sampel',
+    'pembelian_material',
+    'pembuatan_pola',
+    'cutting',
+    'print_bordir',
+    'sewing',
+    'finishing',
+    'qc',
+    'packing',
+    'shipping',
+    'diterima_konsumen',
+    'selesai',
+  ];
+  return (allowed as string[]).includes(v) ? (v as ProductionStatus) : 'order_masuk';
 }
 
-function getProductionBadgeClass(status: ProductionStatus): string {
-  if (status === 'order_masuk') return 'bg-destructive text-destructive-foreground';
-  if (status === 'selesai') return 'bg-velcrone-success-light text-velcrone-success';
-  return 'bg-muted text-muted-foreground';
+function normalizeItems(value: unknown): TransaksiItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const obj = raw as Record<string, unknown>;
+      const productId = typeof obj.productId === 'string' ? obj.productId : '';
+      const productName = typeof obj.productName === 'string' ? obj.productName : '';
+      const ukuran = typeof obj.ukuran === 'string' ? obj.ukuran : '';
+      const warna = typeof obj.warna === 'string' ? obj.warna : '';
+      const qty = typeof obj.qty === 'number' ? obj.qty : Number(obj.qty);
+      const price = typeof obj.price === 'number' ? obj.price : Number(obj.price);
+      const subtotal = typeof obj.subtotal === 'number' ? obj.subtotal : Number(obj.subtotal);
+      if (!productId || !productName) return null;
+      return {
+        productId,
+        productName,
+        ukuran,
+        warna,
+        qty: Number.isFinite(qty) ? qty : 0,
+        price: Number.isFinite(price) ? price : 0,
+        subtotal: Number.isFinite(subtotal) ? subtotal : 0,
+      };
+    })
+    .filter((v): v is TransaksiItem => !!v);
+}
+
+function normalizeSpkDetail(value: unknown): SpkDetailMap {
+  if (!value || typeof value !== 'object') return {};
+  const obj = value as Record<string, unknown>;
+  const out: SpkDetailMap = {};
+  for (const [key, raw] of Object.entries(obj)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const step = typeof row.stepStatus === 'string' ? row.stepStatus : null;
+    const stepStatus = step && (SPK_STEP_OPTIONS as readonly string[]).includes(step) ? step : null;
+    const deadlineDate = typeof row.deadlineDate === 'string' && row.deadlineDate.trim() ? row.deadlineDate.slice(0, 10) : null;
+    out[key] = { stepStatus, deadlineDate };
+  }
+  return out;
 }
 
 function normalizeRow(raw: unknown): TransaksiRow | null {
@@ -99,82 +189,163 @@ function normalizeRow(raw: unknown): TransaksiRow | null {
 
   const customerName = typeof obj.customerName === 'string' ? obj.customerName : 'Umum';
   const date = typeof obj.date === 'string' ? obj.date : null;
+  const status = typeof obj.status === 'string' ? (obj.status as TransaksiStatus) : 'pending';
   const productionStatus = coerceProductionStatus(obj.productionStatus);
+  const items = normalizeItems(obj.items);
+  const spkDetail = normalizeSpkDetail(obj.spkDetail);
 
-  return { id, invoice, date, customerName, productionStatus };
+  return { id, invoice, date, customerName, status, productionStatus, spkDetail, items };
+}
+
+function parseInvoiceParts(invoice: string): { trxPart: string; month: string; year: string } {
+  const parts = String(invoice || '').split('/').map((p) => p.trim()).filter(Boolean);
+  const trxPart = parts.find((p) => /^TRX-\d{3}$/i.test(p)) || 'TRX-000';
+  const month = parts.length >= 2 && /^\d{2}$/.test(parts[parts.length - 2] || '') ? (parts[parts.length - 2] as string) : '01';
+  const year = parts.length >= 1 && /^\d{4}$/.test(parts[parts.length - 1] || '') ? (parts[parts.length - 1] as string) : '1970';
+  return { trxPart: trxPart.toUpperCase(), month, year };
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
 }
 
 export default function ProductionStatusPage() {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '');
-  const queryClient = useQueryClient();
 
   const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | ProductionStatus>('all');
-  const [selected, setSelected] = useState<TransaksiRow | null>(null);
-  const [formStatus, setFormStatus] = useState<ProductionStatus>('order_masuk');
-  const [formDate, setFormDate] = useState<string>('');
+  const [selectedSpk, setSelectedSpk] = useState<SpkRowView | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['transaksi', 'production-status'],
-    queryFn: async (): Promise<TransaksiRow[]> => {
-      const response = await fetch(`${apiBaseUrl}/api/v1/transaksi`);
-      const payload = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(getApiErrorMessage(payload, 'Gagal memuat data transaksi'));
-      if (!Array.isArray(payload)) return [];
-      return (payload as unknown[])
-        .map(normalizeRow)
-        .filter((v): v is TransaksiRow => !!v);
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, productionStatus, productionDate }: { id: string; productionStatus: ProductionStatus; productionDate: string }) => {
-      const response = await fetch(`${apiBaseUrl}/api/v1/transaksi/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productionStatus, productionDate }),
-      });
-      const payload = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(getApiErrorMessage(payload, 'Gagal mengubah status produksi'));
-      return payload;
-    },
-    onSuccess: async () => {
-      toast.success('Status produksi berhasil diperbarui');
-      setSelected(null);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['transaksi'] }),
-        queryClient.invalidateQueries({ queryKey: ['transaksi', 'production-status'] }),
+    queryFn: async (): Promise<RawSpkRow[]> => {
+      const [transaksiRes, barangRes] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/v1/transaksi`),
+        fetch(`${apiBaseUrl}/api/v1/barang`),
       ]);
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : 'Gagal mengubah status produksi');
+
+      const transaksiPayload = await parseJsonSafe(transaksiRes);
+      if (!transaksiRes.ok) throw new Error(getApiErrorMessage(transaksiPayload, 'Gagal memuat data transaksi'));
+
+      const barangPayload = await parseJsonSafe(barangRes);
+      if (!barangRes.ok) throw new Error(getApiErrorMessage(barangPayload, 'Gagal memuat data barang'));
+
+      const transaksis = Array.isArray(transaksiPayload)
+        ? (transaksiPayload as unknown[])
+            .map(normalizeRow)
+            .filter((v): v is TransaksiRow => !!v)
+            .filter((t) => t.status !== 'cancelled')
+        : [];
+
+      const barangs = Array.isArray(barangPayload) ? (barangPayload as unknown[]) : [];
+      const barangMap = new Map<string, BarangRow>();
+      for (const raw of barangs) {
+        if (!raw || typeof raw !== 'object') continue;
+        const obj = raw as Record<string, unknown>;
+        const kode = typeof obj.kode === 'string' ? obj.kode : '';
+        if (!kode) continue;
+        const kategori = typeof obj.kategori === 'string' ? obj.kategori : null;
+        const jenis = Array.isArray(obj.jenis) ? obj.jenis.filter((x): x is string => typeof x === 'string') : [];
+        barangMap.set(kode, { kode, kategori, jenis });
+      }
+
+      const result: RawSpkRow[] = [];
+      for (const t of transaksis) {
+        const { trxPart, month, year } = parseInvoiceParts(t.invoice);
+
+        const grouped = new Map<string, { productId: string; productName: string; warna: string; qty: number; sizes: Record<string, number> }>();
+        for (const it of t.items) {
+          const warna = (it.warna || '').trim();
+          const key = `${it.productId}::${warna}`;
+          const sizeKey = (it.ukuran || '').trim().toUpperCase();
+          const existing = grouped.get(key);
+          if (existing) {
+            existing.qty += it.qty || 0;
+            if (sizeKey) existing.sizes[sizeKey] = (existing.sizes[sizeKey] || 0) + (it.qty || 0);
+          } else {
+            const sizes: Record<string, number> = {};
+            if (sizeKey) sizes[sizeKey] = (it.qty || 0);
+            grouped.set(key, { productId: it.productId, productName: it.productName, warna, qty: it.qty || 0, sizes });
+          }
+        }
+
+        const groups = Array.from(grouped.values()).sort((a, b) => {
+          const an = a.productName.toLowerCase();
+          const bn = b.productName.toLowerCase();
+          if (an < bn) return -1;
+          if (an > bn) return 1;
+          return a.warna.toLowerCase().localeCompare(b.warna.toLowerCase());
+        });
+
+        for (let i = 0; i < groups.length; i++) {
+          const g = groups[i]!;
+          const spkIndex = i + 1;
+          const spkNumber = `${pad2(spkIndex)}/SPK-${spkIndex}/${trxPart}/${month}/${year}`;
+          const barang = barangMap.get(g.productId);
+          const warnaProduk = g.warna ? g.warna : null;
+          const sizes = Object.entries(g.sizes || {})
+            .map(([size, qty]) => ({ size, qty }))
+            .filter((x) => x.size.trim() !== '' && Number.isFinite(x.qty) && x.qty > 0);
+
+          result.push({
+            id: `${t.id}:${g.productId}:${g.warna}`,
+            transaksiId: t.id,
+            spkNumber,
+            invoice: t.invoice,
+            orderDate: t.date,
+            customerName: t.customerName,
+            kategoriProduk: barang?.kategori ?? null,
+            productId: g.productId,
+            productName: g.productName,
+            warnaProduk,
+            jenisProduk: barang?.jenis ?? [],
+            qty: g.qty,
+            sizes,
+            status: t.status,
+            productionStatus: t.productionStatus,
+            spkDetail: t.spkDetail,
+          });
+        }
+      }
+
+      return result;
     },
   });
 
-  const filtered = useMemo(() => {
+  const spkRows = useMemo((): SpkRowView[] => {
     const all = listQuery.data ?? [];
     const q = search.toLowerCase().trim();
-    return all.filter((t) => {
-      if (filterStatus !== 'all' && t.productionStatus !== filterStatus) return false;
-      if (!q) return true;
-      return t.invoice.toLowerCase().includes(q) || t.customerName.toLowerCase().includes(q);
-    });
-  }, [listQuery.data, search, filterStatus]);
-
-  const openEdit = (row: TransaksiRow) => {
-    setSelected(row);
-    setFormStatus(row.productionStatus);
-    setFormDate(new Date().toISOString().slice(0, 10));
-  };
-
-  const submit = async () => {
-    if (!selected) return;
-    if (!formDate.trim()) {
-      toast.error('Tanggal status wajib diisi');
-      return;
+    const out: SpkRowView[] = [];
+    for (const row of all) {
+      const spkKey = `${row.productId}::${row.warnaProduk || ''}`;
+      const detail = row.spkDetail[spkKey] || null;
+      const deadlineDate = detail?.deadlineDate ?? null;
+      const stepStatus = ((detail?.stepStatus ?? null) as SpkStepStatus | null) ?? 'DESIGN';
+      const stage: KanbanStage = (KANBAN_STAGES as readonly string[]).includes(stepStatus)
+        ? (stepStatus as KanbanStage)
+        : 'DESIGN';
+      const view: SpkRowView = { ...row, deadlineDate, stage };
+      if (q) {
+        const hay = `${row.invoice} ${row.spkNumber} ${row.customerName} ${row.productName}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      out.push(view);
     }
-    await updateMutation.mutateAsync({ id: selected.id, productionStatus: formStatus, productionDate: formDate });
-  };
+    return out;
+  }, [listQuery.data, search]);
+
+  const kanban = useMemo(() => {
+    const map = new Map<KanbanStage, SpkRowView[]>();
+    for (const s of KANBAN_STAGES) map.set(s, []);
+    for (const row of spkRows) {
+      const list = map.get(row.stage);
+      if (list) list.push(row);
+    }
+    for (const s of KANBAN_STAGES) {
+      const list = map.get(s);
+      if (list) list.sort((a, b) => a.spkNumber.localeCompare(b.spkNumber));
+    }
+    return map;
+  }, [spkRows]);
 
   return (
     <div className="space-y-4">
@@ -188,94 +359,138 @@ export default function ProductionStatusPage() {
             <div className="relative max-w-sm w-full">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Cari invoice / pelanggan..."
+                placeholder="Cari SPK / invoice / pelanggan / produk..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-10"
               />
             </div>
-
-            <div className="w-full sm:w-64">
-              <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as 'all' | ProductionStatus)}>
-                <SelectTrigger><SelectValue placeholder="Filter status produksi" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Status</SelectItem>
-                  {productionOptions.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
           </div>
         </div>
 
-        <div className="divide-y">
-          {listQuery.isLoading ? (
-            <div className="p-6 text-center text-muted-foreground">Memuat data...</div>
-          ) : listQuery.isError ? (
-            <div className="p-6 text-center text-destructive">
-              {listQuery.error instanceof Error ? listQuery.error.message : 'Gagal memuat data'}
+        {listQuery.isLoading ? (
+          <div className="p-6 text-center text-muted-foreground">Memuat data...</div>
+        ) : listQuery.isError ? (
+          <div className="p-6 text-center text-destructive">
+            {listQuery.error instanceof Error ? listQuery.error.message : 'Gagal memuat data'}
+          </div>
+        ) : spkRows.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground">Tidak ada data</div>
+        ) : (
+          <div className="p-4 overflow-x-auto">
+            <div className="flex gap-4 min-w-max">
+              {KANBAN_STAGES.map((stage) => {
+                const rows = kanban.get(stage) || [];
+                return (
+                  <div key={stage} className="w-[280px] shrink-0">
+                    <div className="rounded-lg border bg-background">
+                      <div className="p-3 border-b flex items-center justify-between">
+                        <p className="font-semibold text-sm text-foreground">{stage}</p>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">{rows.length}</span>
+                      </div>
+                      <div className="p-2 space-y-2 max-h-[calc(100vh-260px)] overflow-y-auto">
+                        {rows.length === 0 ? (
+                          <p className="text-xs text-muted-foreground px-2 py-2">Tidak ada SPK</p>
+                        ) : (
+                          rows.map((row) => (
+                            <button
+                              key={row.id}
+                              type="button"
+                              className="w-full text-left rounded-md border bg-muted/20 hover:bg-muted/40 transition-colors p-2"
+                              onClick={() => setSelectedSpk(row)}
+                            >
+                              <p className="text-sm font-medium text-foreground truncate">{row.spkNumber}</p>
+                              <p className="text-xs text-muted-foreground truncate">{row.invoice}</p>
+                              <p className="text-xs text-muted-foreground truncate">{row.productName}{row.warnaProduk ? ` • ${row.warnaProduk}` : ''}</p>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">Tidak ada data</div>
-          ) : (
-            filtered.map((t) => (
-              <div key={t.id} className="p-4 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="font-medium text-foreground text-sm">{t.invoice}</p>
-                  <p className="text-xs text-muted-foreground">{t.date || '-'} • {t.customerName}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`text-xs px-2 py-1 rounded-md ${getProductionBadgeClass(t.productionStatus)}`}>
-                    {productionOptions.find((o) => o.value === t.productionStatus)?.label || 'Order Masuk'}
-                  </span>
-                  <Button variant="outline" size="sm" onClick={() => openEdit(t)}>
-                    <Pencil size={16} className="mr-2" /> Ubah
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="bg-card max-w-lg">
-          <DialogHeader><DialogTitle>Ubah Status Produksi</DialogTitle></DialogHeader>
-          {selected && (
+      <Dialog open={!!selectedSpk} onOpenChange={(open) => !open && setSelectedSpk(null)}>
+        <DialogContent className="bg-card max-w-2xl">
+          <DialogHeader><DialogTitle>Detail SPK</DialogTitle></DialogHeader>
+          {selectedSpk && (
             <div className="space-y-4">
-              <div>
-                <p className="text-sm text-muted-foreground">Invoice</p>
-                <p className="font-medium text-foreground">{selected.invoice}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-sm text-muted-foreground">Nomor SPK</p>
+                  <p className="font-medium text-foreground">{selectedSpk.spkNumber}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Nomor Invoice</p>
+                  <p className="font-medium text-foreground">{selectedSpk.invoice}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Tanggal Order</p>
+                  <p className="font-medium text-foreground">{selectedSpk.orderDate || '-'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Tanggal Deadline</p>
+                  <p className="font-medium text-foreground">{selectedSpk.deadlineDate || '-'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Pelanggan</p>
+                  <p className="font-medium text-foreground">{selectedSpk.customerName}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Status</p>
+                  <p className="font-medium text-foreground">{selectedSpk.stage}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Produk</p>
+                  <p className="font-medium text-foreground">{selectedSpk.productName}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Warna</p>
+                  <p className="font-medium text-foreground">{selectedSpk.warnaProduk || '-'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Kategori</p>
+                  <p className="font-medium text-foreground">{selectedSpk.kategoriProduk || '-'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Qty</p>
+                  <p className="font-medium text-foreground">{`${selectedSpk.qty} pcs`}</p>
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-sm text-muted-foreground">Jenis</p>
+                  <p className="font-medium text-foreground">{selectedSpk.jenisProduk.join(', ') || '-'}</p>
+                </div>
               </div>
 
-              <div>
-                <Label>Status Produksi</Label>
-                <Select value={formStatus} onValueChange={(v) => setFormStatus(v as ProductionStatus)}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih status produksi" /></SelectTrigger>
-                  <SelectContent>
-                    {productionOptions.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="rounded-md border">
+                <div className="p-3 border-b">
+                  <p className="text-sm font-medium text-foreground">Rincian Ukuran</p>
+                </div>
+                <div className="p-3">
+                  {selectedSpk.sizes.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Tidak ada item</p>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {selectedSpk.sizes.map((s) => (
+                        <div key={s.size} className="rounded-md border bg-muted/20 px-3 py-2">
+                          <p className="text-xs text-muted-foreground">Ukuran</p>
+                          <p className="text-sm font-medium text-foreground">{s.size}</p>
+                          <p className="text-xs text-muted-foreground mt-1">Qty</p>
+                          <p className="text-sm font-medium text-foreground">{s.qty}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <Label>Tanggal Status</Label>
-                <Input
-                  className="mt-1"
-                  type="date"
-                  value={formDate}
-                  onChange={(e) => setFormDate(e.target.value)}
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-1">
-                <Button variant="outline" onClick={() => setSelected(null)} disabled={updateMutation.isPending}>Batal</Button>
-                <Button onClick={submit} disabled={updateMutation.isPending} className="velcrone-gradient text-primary-foreground hover:opacity-90">
-                  {updateMutation.isPending ? 'Menyimpan...' : 'Simpan'}
-                </Button>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setSelectedSpk(null)}>Tutup</Button>
               </div>
             </div>
           )}

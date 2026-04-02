@@ -103,6 +103,15 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
+  .scrollbar-hidden {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hidden::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
   .velcrone-gradient {
     background: linear-gradient(135deg, hsl(var(--velcrone-red)) 0%, hsl(var(--velcrone-red-dark)) 100%);
   }
