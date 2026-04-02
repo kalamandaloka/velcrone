@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../models/transaksi.dart';
 import '../../models/barang.dart';
 import '../../models/pelanggan.dart';
+import '../../services/api_service.dart';
 
 class FormTransaksiScreen extends StatefulWidget {
   const FormTransaksiScreen({super.key});
@@ -14,16 +15,19 @@ class FormTransaksiScreen extends StatefulWidget {
 class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
   // Controllers
   final _qtyController = TextEditingController();
-  final _bayarController = TextEditingController();
+  final _warnaController = TextEditingController();
   
-  // Data
-  final List<Pelanggan> _pelangganList = Pelanggan.dummyData;
-  final List<Barang> _barangList = Barang.dummyData;
+  final ApiService _api = ApiService();
+  List<Pelanggan> _pelangganList = [];
+  List<Barang> _barangList = [];
+  bool _isLoading = true;
+  String? _error;
   
   // State
-  bool _isHutang = false;
+  String _paymentMethod = 'cash';
   Pelanggan? _selectedPelanggan;
   Barang? _selectedBarang;
+  String? _selectedUkuran;
   final List<DetailTransaksi> _cart = [];
   
   // Formatters
@@ -36,35 +40,59 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
   @override
   void dispose() {
     _qtyController.dispose();
-    _bayarController.dispose();
+    _warnaController.dispose();
     super.dispose();
   }
 
   // Computed Properties
   double get _totalBelanja => _cart.fold(0, (sum, item) => sum + item.subtotal);
   
-  double get _bayar {
-    if (_bayarController.text.isEmpty) return 0;
-    // Remove non-digits for parsing if user types "Rp 100.000" (though we'll restrict to number input)
-    String clean = _bayarController.text.replaceAll(RegExp(r'[^0-9]'), '');
-    return double.tryParse(clean) ?? 0;
-  }
-  
-  double get _kembalian => _bayar - _totalBelanja;
-  double get _kembalianNonNegatif {
-    final k = _kembalian;
-    return k > 0 ? k : 0;
+  @override
+  void initState() {
+    super.initState();
+    _loadMasterData();
   }
 
-  double get _sisa {
-    final s = _totalBelanja - _bayar;
-    return s > 0 ? s : 0;
+  Future<void> _loadMasterData() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final pelanggan = await _api.fetchPelanggan();
+      final barang = await _api.fetchBarang();
+      if (!mounted) return;
+      setState(() {
+        _pelangganList = pelanggan;
+        _barangList = barang;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   void _addItem() {
     if (_selectedBarang == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih barang terlebih dahulu')),
+      );
+      return;
+    }
+
+    if (_selectedUkuran == null || _selectedUkuran!.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pilih ukuran terlebih dahulu')),
       );
       return;
     }
@@ -77,16 +105,14 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
       return;
     }
 
-    if (qty > _selectedBarang!.stok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Stok tidak cukup (Sisa: ${_selectedBarang!.stok})')),
-      );
-      return;
-    }
-
     setState(() {
       // Check if item already exists
-      final index = _cart.indexWhere((item) => item.idBarang == _selectedBarang!.kode);
+      final index = _cart.indexWhere((item) =>
+          item.idBarang == _selectedBarang!.kode &&
+          item.ukuran == _selectedUkuran &&
+          item.warna == _warnaController.text.trim());
+
+      final defaultPrice = _selectedBarang!.hargaJual * (1 - (_selectedBarang!.diskon / 100));
       if (index != -1) {
         // Update existing item
         final existingItem = _cart[index];
@@ -96,19 +122,25 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
           namaBarang: existingItem.namaBarang,
           harga: existingItem.harga,
           qty: newQty,
+          ukuran: existingItem.ukuran,
+          warna: existingItem.warna,
         );
       } else {
         // Add new item
         _cart.add(DetailTransaksi(
           idBarang: _selectedBarang!.kode,
           namaBarang: _selectedBarang!.nama,
-          harga: _selectedBarang!.hargaJual,
+          harga: defaultPrice,
           qty: qty,
+          ukuran: _selectedUkuran!,
+          warna: _warnaController.text.trim(),
         ));
       }
       
       // Reset Item Input
       _selectedBarang = null;
+      _selectedUkuran = null;
+      _warnaController.clear();
       _qtyController.clear();
     });
   }
@@ -119,7 +151,7 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
     });
   }
 
-  void _saveTransaksi() {
+  Future<void> _saveTransaksi() async {
     if (_selectedPelanggan == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih pelanggan terlebih dahulu')),
@@ -134,30 +166,38 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
       return;
     }
 
-    if (!_isHutang && _bayar < _totalBelanja) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pembayaran kurang')),
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final created = await _api.createTransaksi(
+        customerId: _selectedPelanggan!.id,
+        items: _cart,
+        paymentMethod: _paymentMethod,
       );
-      return;
+      if (!mounted) return;
+      Navigator.pop(context, created);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal simpan transaksi: ${e.message}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal simpan transaksi: $e')),
+      );
     }
-
-    // Create Transaksi Object
-    final now = DateTime.now();
-    final noFaktur = 'INV/${DateFormat('yyyyMMdd').format(now)}/${now.millisecondsSinceEpoch.toString().substring(8)}';
-    
-    final transaksi = Transaksi(
-      id: 'TRX-${now.millisecondsSinceEpoch}',
-      noFaktur: noFaktur,
-      tanggal: now,
-      namaPelanggan: _selectedPelanggan!.nama,
-      totalHarga: _totalBelanja,
-      bayar: _bayar,
-      kembalian: _isHutang ? 0 : _kembalianNonNegatif,
-      items: List.from(_cart),
-      status: _isHutang ? 'Pending' : 'Lunas',
-    );
-
-    Navigator.pop(context, transaksi);
   }
 
   @override
@@ -166,11 +206,45 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
       appBar: AppBar(
         title: const Text('Tambah Transaksi'),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      body: (_isLoading && _pelangganList.isEmpty && _barangList.isEmpty)
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Text('Gagal memuat data: $_error'),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: _loadMasterData,
+                        child: const Text('Coba Lagi'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            )
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_error != null) ...[
+                    Card(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
             // Section 1: Header Info
             Card(
               child: Padding(
@@ -238,7 +312,11 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
                               );
                             }).toList(),
                             onChanged: (val) {
-                              setState(() => _selectedBarang = val);
+                              setState(() {
+                                _selectedBarang = val;
+                                _selectedUkuran = null;
+                                _warnaController.clear();
+                              });
                             },
                           ),
                         ),
@@ -262,6 +340,41 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 1,
+                          child: DropdownButtonFormField<String>(
+                            key: ValueKey('${_selectedBarang?.kode ?? 'barang_none'}_${_selectedUkuran ?? 'ukuran_none'}'),
+                            decoration: const InputDecoration(
+                              labelText: 'Ukuran',
+                              border: OutlineInputBorder(),
+                            ),
+                            initialValue: _selectedUkuran,
+                            items: (_selectedBarang?.ukuran ?? const <String>[])
+                                .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                                .toList(),
+                            onChanged: (_selectedBarang == null)
+                                ? null
+                                : (val) {
+                                    setState(() => _selectedUkuran = val);
+                                  },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 1,
+                          child: TextField(
+                            controller: _warnaController,
+                            decoration: const InputDecoration(
+                              labelText: 'Warna (opsional)',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -280,9 +393,14 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
                     separatorBuilder: (_, __) => const Divider(),
                     itemBuilder: (context, index) {
                       final item = _cart[index];
+                      final label = [
+                        '${item.qty} x ${_currencyFormat.format(item.harga)}',
+                        item.ukuran,
+                        if (item.warna.trim().isNotEmpty) item.warna.trim(),
+                      ].join(' • ');
                       return ListTile(
                         title: Text(item.namaBarang),
-                        subtitle: Text('${item.qty} x ${_currencyFormat.format(item.harga)}'),
+                        subtitle: Text(label),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -319,49 +437,23 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    TextField(
-                      controller: _bayarController,
-                      keyboardType: TextInputType.number,
+                    DropdownButtonFormField<String>(
+                      key: ValueKey(_paymentMethod),
+                      initialValue: _paymentMethod,
                       decoration: const InputDecoration(
-                        labelText: 'Bayar (Rp)',
+                        labelText: 'Metode Pembayaran',
                         border: OutlineInputBorder(),
-                        prefixText: 'Rp ',
                       ),
-                      onChanged: (val) {
-                        setState(() {}); // Rebuild to update change calculation
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Hutang'),
-                      value: _isHutang,
-                      onChanged: (value) {
-                        setState(() {
-                          _isHutang = value ?? false;
-                        });
-                      },
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          _isHutang ? 'Sisa' : 'Kembalian',
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                        Text(
-                          _currencyFormat.format(_isHutang ? _sisa : _kembalianNonNegatif),
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: _isHutang
-                                ? (_sisa > 0 ? Colors.orange : Colors.green)
-                                : Colors.green,
-                          ),
-                        ),
+                      items: const [
+                        DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                        DropdownMenuItem(value: 'transfer', child: Text('Transfer')),
+                        DropdownMenuItem(value: 'qris', child: Text('QRIS')),
+                        DropdownMenuItem(value: 'cicil', child: Text('Cicil')),
                       ],
+                      onChanged: (val) {
+                        if (val == null) return;
+                        setState(() => _paymentMethod = val);
+                      },
                     ),
                   ],
                 ),
@@ -369,8 +461,8 @@ class _FormTransaksiScreenState extends State<FormTransaksiScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: _saveTransaksi,
-              icon: const Icon(Icons.save),
+              onPressed: _isLoading ? null : _saveTransaksi,
+              icon: _isLoading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save),
               label: const Text('SIMPAN TRANSAKSI'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),

@@ -1,0 +1,432 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Barang;
+use App\Models\Pelanggan;
+use App\Models\Transaksi;
+use App\Models\TransaksiItem;
+use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+
+class TransaksiController extends Controller
+{
+    private const PRODUCTION_STATUSES = [
+        'order_masuk',
+        'quotation',
+        'persetujuan_desain',
+        'sampel',
+        'pembelian_material',
+        'pembuatan_pola',
+        'cutting',
+        'print_bordir',
+        'sewing',
+        'finishing',
+        'qc',
+        'packing',
+        'shipping',
+        'diterima_konsumen',
+        'selesai',
+    ];
+
+    private function normalizePaymentDetails(Transaksi $t): array
+    {
+        $raw = $t->pembayaran_detail;
+        if (! is_array($raw)) return [];
+
+        $out = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) continue;
+            $step = array_key_exists('step', $row) ? (int) $row['step'] : 0;
+            $amount = array_key_exists('amount', $row) ? (float) $row['amount'] : 0.0;
+            $date = array_key_exists('date', $row) && is_string($row['date']) ? $row['date'] : null;
+
+            if ($step < 1 || $step > 5) continue;
+            if (! is_finite($amount) || $amount <= 0) continue;
+            if ($date !== null && trim($date) === '') $date = null;
+
+            $out[] = [
+                'step' => $step,
+                'amount' => $amount,
+                'date' => $date,
+            ];
+        }
+
+        usort($out, fn ($a, $b) => $a['step'] <=> $b['step']);
+        return $out;
+    }
+
+    private function normalizeProductionDetails(Transaksi $t): array
+    {
+        $raw = $t->produksi_detail;
+        if (! is_array($raw)) return [];
+
+        $latest = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) continue;
+            $status = array_key_exists('status', $row) && is_string($row['status']) ? (string) $row['status'] : '';
+            $date = array_key_exists('date', $row) && is_string($row['date']) ? (string) $row['date'] : null;
+
+            if ($status === '' || ! in_array($status, self::PRODUCTION_STATUSES, true)) continue;
+            if ($date !== null && trim($date) === '') $date = null;
+
+            if ($date !== null) {
+                try {
+                    $date = Carbon::parse($date)->toDateString();
+                } catch (\Throwable) {
+                    $date = null;
+                }
+            }
+
+            $latest[$status] = [
+                'status' => $status,
+                'date' => $date,
+            ];
+        }
+
+        $ordered = [];
+        foreach (self::PRODUCTION_STATUSES as $status) {
+            if (array_key_exists($status, $latest)) {
+                $ordered[] = $latest[$status];
+            }
+        }
+        return $ordered;
+    }
+
+    private function sumPaid(array $details): float
+    {
+        $sum = 0.0;
+        foreach ($details as $row) {
+            $sum += (float) ($row['amount'] ?? 0);
+        }
+        return $sum;
+    }
+
+    private function computeTransaksiStatus(string $dbStatus, string $productionStatus, string $paymentStatus): string
+    {
+        if ($dbStatus === 'cancelled') return 'cancelled';
+        if ($productionStatus === 'selesai' && $paymentStatus === 'lunas') return 'completed';
+        return 'pending';
+    }
+
+    public function index(): JsonResponse
+    {
+        $data = Transaksi::query()
+            ->with('items')
+            ->orderByDesc('tanggal')
+            ->get()
+            ->map(function (Transaksi $t) {
+                $payments = $this->normalizePaymentDetails($t);
+                $productionDetails = $this->normalizeProductionDetails($t);
+                $due = (float) $t->total;
+                $paid = $this->sumPaid($payments);
+                if ($paid <= 0 && ((string) $t->status_pembayaran) === 'lunas') $paid = $due;
+                $remaining = max(0.0, $due - $paid);
+                $paymentStatus = $remaining <= 0 ? 'lunas' : 'belum_lunas';
+                $productionStatus = $t->status_produksi ? (string) $t->status_produksi : 'order_masuk';
+                $status = $this->computeTransaksiStatus((string) $t->status, $productionStatus, $paymentStatus);
+
+                return [
+                    'id' => (string) $t->id,
+                    'invoice' => (string) $t->invoice,
+                    'date' => $t->tanggal ? $t->tanggal->format('Y-m-d H:i') : null,
+                    'customerId' => $t->pelanggan_id ? (string) $t->pelanggan_id : '',
+                    'customerName' => $t->pelanggan_nama ? (string) $t->pelanggan_nama : 'Umum',
+                    'items' => $t->items->map(function (TransaksiItem $item) {
+                        return [
+                            'productId' => (string) $item->barang_kode,
+                            'productName' => (string) $item->barang_nama,
+                            'qty' => (int) $item->qty,
+                            'price' => (float) $item->harga,
+                            'subtotal' => (float) $item->subtotal,
+                        ];
+                    })->values(),
+                    'total' => (float) $t->total,
+                    'status' => $status,
+                    'cancelReason' => $t->alasan_batal ? (string) $t->alasan_batal : null,
+                    'productionStatus' => $productionStatus,
+                    'productionDetails' => $productionDetails,
+                    'paymentStatus' => $paymentStatus,
+                    'paymentStep' => (int) ($t->pembayaran_ke ?? 0),
+                    'payments' => $payments,
+                    'paymentDue' => $due,
+                    'paymentPaid' => $paid,
+                    'paymentRemaining' => $remaining,
+                    'paymentMethod' => $t->metode_pembayaran ? (string) $t->metode_pembayaran : '',
+                ];
+            });
+
+        return response()->json($data);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $t = Transaksi::query()->with('items')->findOrFail($id);
+        $payments = $this->normalizePaymentDetails($t);
+        $productionDetails = $this->normalizeProductionDetails($t);
+        $due = (float) $t->total;
+        $paid = $this->sumPaid($payments);
+        if ($paid <= 0 && ((string) $t->status_pembayaran) === 'lunas') $paid = $due;
+        $remaining = max(0.0, $due - $paid);
+        $paymentStatus = $remaining <= 0 ? 'lunas' : 'belum_lunas';
+        $productionStatus = $t->status_produksi ? (string) $t->status_produksi : 'order_masuk';
+        $status = $this->computeTransaksiStatus((string) $t->status, $productionStatus, $paymentStatus);
+
+        return response()->json([
+            'id' => (string) $t->id,
+            'invoice' => (string) $t->invoice,
+            'date' => $t->tanggal ? $t->tanggal->format('Y-m-d H:i') : null,
+            'customerId' => $t->pelanggan_id ? (string) $t->pelanggan_id : '',
+            'customerName' => $t->pelanggan_nama ? (string) $t->pelanggan_nama : 'Umum',
+            'items' => $t->items->map(function (TransaksiItem $item) {
+                return [
+                    'productId' => (string) $item->barang_kode,
+                    'productName' => (string) $item->barang_nama,
+                    'qty' => (int) $item->qty,
+                    'price' => (float) $item->harga,
+                    'subtotal' => (float) $item->subtotal,
+                ];
+            })->values(),
+            'total' => (float) $t->total,
+            'status' => $status,
+            'cancelReason' => $t->alasan_batal ? (string) $t->alasan_batal : null,
+            'productionStatus' => $productionStatus,
+            'productionDetails' => $productionDetails,
+            'paymentStatus' => $paymentStatus,
+            'paymentStep' => (int) ($t->pembayaran_ke ?? 0),
+            'payments' => $payments,
+            'paymentDue' => $due,
+            'paymentPaid' => $paid,
+            'paymentRemaining' => $remaining,
+            'paymentMethod' => $t->metode_pembayaran ? (string) $t->metode_pembayaran : '',
+        ]);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'invoice' => ['nullable', 'string', Rule::unique('transaksis', 'invoice')],
+            'date' => ['nullable', 'date'],
+            'customerId' => ['nullable', 'string', Rule::exists('pelanggans', 'id')],
+            'customerName' => ['nullable', 'string'],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.productId' => ['required', 'string'],
+            'items.*.qty' => ['required', 'integer', 'min:1'],
+            'items.*.price' => ['nullable', 'numeric', 'min:0'],
+            'paymentMethod' => ['required', 'string'],
+        ]);
+
+        $tanggal = array_key_exists('date', $validated)
+            ? Carbon::parse($validated['date'])
+            : now();
+
+        return DB::transaction(function () use ($validated, $tanggal) {
+            $pelangganNama = 'Umum';
+            $pelangganId = null;
+
+            if (! empty($validated['customerId'])) {
+                $pelanggan = Pelanggan::findOrFail((string) $validated['customerId']);
+                $pelangganId = (string) $pelanggan->id;
+                $pelangganNama = (string) $pelanggan->nama;
+            } elseif (! empty($validated['customerName'])) {
+                $pelangganNama = (string) $validated['customerName'];
+            }
+
+            $invoice = ! empty($validated['invoice'])
+                ? (string) $validated['invoice']
+                : $this->generateInvoice($tanggal);
+
+            $transaksi = Transaksi::create([
+                'id' => (string) Str::uuid(),
+                'invoice' => $invoice,
+                'tanggal' => $tanggal,
+                'pelanggan_id' => $pelangganId,
+                'pelanggan_nama' => $pelangganNama,
+                'total' => 0,
+                'status' => 'pending',
+                'alasan_batal' => null,
+                'status_produksi' => 'order_masuk',
+                'produksi_detail' => [
+                    ['status' => 'order_masuk', 'date' => $tanggal->toDateString()],
+                ],
+                'status_pembayaran' => 'belum_lunas',
+                'pembayaran_ke' => 0,
+                'pembayaran_detail' => null,
+                'metode_pembayaran' => (string) $validated['paymentMethod'],
+            ]);
+
+            $total = 0.0;
+            $itemsToCreate = [];
+
+            foreach ($validated['items'] as $row) {
+                $kode = (string) $row['productId'];
+                $qty = (int) $row['qty'];
+                $barang = Barang::find($kode);
+                if (! $barang) {
+                    return response()->json(['message' => "Barang tidak ditemukan: {$kode}"], 422);
+                }
+
+                $hargaDefault = (float) $barang->harga_jual * (1 - ((float) $barang->diskon / 100));
+                $harga = array_key_exists('price', $row) && $row['price'] !== null ? (float) $row['price'] : $hargaDefault;
+                $subtotal = $harga * $qty;
+
+                $itemsToCreate[] = [
+                    'transaksi_id' => $transaksi->id,
+                    'barang_kode' => $barang->kode,
+                    'barang_nama' => $barang->nama,
+                    'qty' => $qty,
+                    'harga' => $harga,
+                    'subtotal' => $subtotal,
+                ];
+
+                $total += $subtotal;
+            }
+
+            $transaksi->update(['total' => $total]);
+            TransaksiItem::query()->insert($itemsToCreate);
+
+            return response()->json([
+                'message' => 'Transaksi created',
+                'id' => (string) $transaksi->id,
+                'invoice' => (string) $transaksi->invoice,
+            ], 201);
+        });
+    }
+
+    public function update(Request $request, string $id): JsonResponse
+    {
+        $transaksi = Transaksi::query()->with('items')->findOrFail($id);
+        $validated = $request->validate([
+            'status' => ['sometimes', Rule::in(['cancelled'])],
+            'cancelReason' => ['required_with:status', 'string', 'max:255'],
+            'paymentMethod' => ['sometimes', 'string'],
+            'productionStatus' => ['sometimes', Rule::in(self::PRODUCTION_STATUSES)],
+            'productionDate' => ['required_with:productionStatus', 'date'],
+            'paymentStatus' => ['sometimes', Rule::in(['belum_lunas', 'lunas'])],
+            'paymentStep' => ['sometimes', 'integer', 'min:0', 'max:5'],
+            'payment' => ['sometimes', 'array'],
+            'payment.step' => ['required_with:payment', 'integer', 'min:1', 'max:5'],
+            'payment.amount' => ['required_with:payment', 'numeric', 'min:0'],
+            'payment.date' => ['required_with:payment', 'date'],
+        ]);
+
+        return DB::transaction(function () use ($transaksi, $validated) {
+            $fromStatus = (string) $transaksi->status;
+            $isCancel = array_key_exists('status', $validated) && ((string) $validated['status']) === 'cancelled';
+            $toStatus = $isCancel ? 'cancelled' : $fromStatus;
+
+            $productionStatus = array_key_exists('productionStatus', $validated)
+                ? (string) $validated['productionStatus']
+                : ((string) ($transaksi->status_produksi ?? 'order_masuk'));
+
+            $productionDetails = $this->normalizeProductionDetails($transaksi);
+            if (array_key_exists('productionStatus', $validated)) {
+                $productionDate = Carbon::parse((string) $validated['productionDate'])->toDateString();
+                $byStatus = [];
+                foreach ($productionDetails as $row) {
+                    if (! is_array($row)) continue;
+                    $s = array_key_exists('status', $row) && is_string($row['status']) ? (string) $row['status'] : '';
+                    $d = array_key_exists('date', $row) && is_string($row['date']) ? (string) $row['date'] : null;
+                    if ($s === '' || ! in_array($s, self::PRODUCTION_STATUSES, true)) continue;
+                    $byStatus[$s] = ['status' => $s, 'date' => $d];
+                }
+                $byStatus[$productionStatus] = ['status' => $productionStatus, 'date' => $productionDate];
+                $productionDetails = [];
+                foreach (self::PRODUCTION_STATUSES as $s) {
+                    if (array_key_exists($s, $byStatus)) $productionDetails[] = $byStatus[$s];
+                }
+            }
+
+            $payments = $this->normalizePaymentDetails($transaksi);
+            if (array_key_exists('payment', $validated)) {
+                $p = is_array($validated['payment']) ? $validated['payment'] : [];
+                $step = array_key_exists('step', $p) ? (int) $p['step'] : 0;
+                $amount = array_key_exists('amount', $p) ? (float) $p['amount'] : 0.0;
+                $date = Carbon::parse((string) $p['date'])->toDateString();
+
+                $payments = array_values(array_filter($payments, fn ($row) => (int) ($row['step'] ?? 0) !== $step));
+                if ($amount > 0) {
+                    $payments[] = [
+                        'step' => $step,
+                        'amount' => $amount,
+                        'date' => $date,
+                    ];
+                }
+                usort($payments, fn ($a, $b) => $a['step'] <=> $b['step']);
+            }
+
+            $paid = $this->sumPaid($payments);
+            $due = (float) $transaksi->total;
+            $remaining = $due - $paid;
+            $maxStep = 0;
+            foreach ($payments as $row) {
+                $maxStep = max($maxStep, (int) ($row['step'] ?? 0));
+            }
+            $computedPaymentStatus = $remaining <= 0 ? 'lunas' : 'belum_lunas';
+            $paymentStatus = $computedPaymentStatus;
+
+            if (! $isCancel) {
+                $toStatus = $this->computeTransaksiStatus((string) $transaksi->status, $productionStatus, $paymentStatus);
+            }
+
+            if ($fromStatus !== $toStatus) {
+                if ($fromStatus !== 'completed' && $toStatus === 'completed') {
+                    foreach ($transaksi->items as $item) {
+                        $barang = Barang::find((string) $item->barang_kode);
+                        if (! $barang) {
+                            return response()->json(['message' => "Barang tidak ditemukan: {$item->barang_kode}"], 422);
+                        }
+                        if ((int) $barang->stok < (int) $item->qty) {
+                            return response()->json(['message' => "Stok tidak cukup untuk {$barang->nama}"], 409);
+                        }
+                        $barang->decrement('stok', (int) $item->qty);
+                    }
+                }
+
+                if ($fromStatus === 'completed' && $toStatus !== 'completed') {
+                    foreach ($transaksi->items as $item) {
+                        $barang = Barang::find((string) $item->barang_kode);
+                        if ($barang) {
+                            $barang->increment('stok', (int) $item->qty);
+                        }
+                    }
+                }
+            }
+
+            $transaksi->update([
+                'status' => $toStatus,
+                'alasan_batal' => $isCancel ? (string) ($validated['cancelReason'] ?? '') : $transaksi->alasan_batal,
+                'metode_pembayaran' => array_key_exists('paymentMethod', $validated)
+                    ? (string) $validated['paymentMethod']
+                    : $transaksi->metode_pembayaran,
+                'status_produksi' => $productionStatus,
+                'produksi_detail' => $productionDetails,
+                'pembayaran_ke' => array_key_exists('payment', $validated)
+                    ? $maxStep
+                    : (array_key_exists('paymentStep', $validated) ? (int) $validated['paymentStep'] : $transaksi->pembayaran_ke),
+                'status_pembayaran' => $paymentStatus,
+                'pembayaran_detail' => $payments,
+            ]);
+
+            return response()->json(['message' => 'Transaksi updated']);
+        });
+    }
+
+    private function generateInvoice(Carbon $tanggal): string
+    {
+        $prefix = 'INV/'.$tanggal->format('Ymd').'/';
+        $sequence = (int) Transaksi::query()->whereDate('tanggal', $tanggal->toDateString())->count() + 1;
+
+        while (true) {
+            $invoice = $prefix.str_pad((string) $sequence, 3, '0', STR_PAD_LEFT);
+            $exists = Transaksi::query()->where('invoice', $invoice)->exists();
+            if (! $exists) return $invoice;
+            $sequence++;
+        }
+    }
+}

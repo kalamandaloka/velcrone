@@ -1,12 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 import 'screens/admin/data_barang_screen.dart';
 import 'screens/admin/data_pelanggan_screen.dart';
 import 'screens/admin/data_pemasok_screen.dart';
 import 'screens/admin/laporan_screen.dart';
 import 'screens/admin/riwayat_transaksi_screen.dart';
 import 'screens/admin/stok_bahan_screen.dart';
+import 'screens/production/role_spk_dashboard_screen.dart';
+import 'services/api_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting();
+  Intl.defaultLocale = 'id_ID';
   runApp(const VelcroneApp());
 }
 
@@ -102,6 +109,7 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isSubmitting = false;
+  final ApiService _api = ApiService();
 
   @override
   void dispose() {
@@ -129,41 +137,83 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _isSubmitting = true;
     });
+    try {
+      final String email = _usernameController.text.trim();
+      final String password = _passwordController.text;
 
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+      final user = await _api.login(email: email, password: password);
+      final role = (user['role'] ?? '').toString().toLowerCase();
+      final normalizedRole = role.replaceAll('_', ' ').trim();
 
-    final String username = _usernameController.text.trim();
-    final String password = _passwordController.text;
+      ProductionRole? productionRole;
+      if (normalizedRole == 'design') {
+        productionRole = ProductionRole.design;
+      } else if (normalizedRole == 'setting') {
+        productionRole = ProductionRole.setting;
+      } else if (normalizedRole == 'printing') {
+        productionRole = ProductionRole.printing;
+      } else if (normalizedRole == 'heat press' || normalizedRole == 'heatpress') {
+        productionRole = ProductionRole.heatPress;
+      } else if (normalizedRole == 'sewing') {
+        productionRole = ProductionRole.sewing;
+      } else if (normalizedRole == 'qc') {
+        productionRole = ProductionRole.qc;
+      } else if (normalizedRole == 'packing') {
+        productionRole = ProductionRole.packing;
+      } else if (normalizedRole == 'delivery') {
+        productionRole = ProductionRole.delivery;
+      }
 
-    // Determine role based on credentials
-    UserRole? determinedRole;
-    if (username == 'admin' && password == 'admin') {
-      determinedRole = UserRole.administrator;
-    } else if (username == 'manager' && password == 'manager') {
-      determinedRole = UserRole.manager;
-    } else if (username == 'kasir' && password == 'kasir') {
-      determinedRole = UserRole.kasir;
-    } else if (username == 'pelanggan' && password == 'pelanggan') {
-      determinedRole = UserRole.pelanggan;
-    }
+      if (productionRole != null) {
+        if (!mounted) return;
+        setState(() {
+          _isSubmitting = false;
+        });
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => RoleSpkDashboardScreen(role: productionRole!)),
+        );
+        return;
+      }
 
-    if (!mounted) return;
+      UserRole determinedRole;
+      if (role == 'manager') {
+        determinedRole = UserRole.manager;
+      } else if (role == 'kasir') {
+        determinedRole = UserRole.kasir;
+      } else if (role == 'pelanggan') {
+        determinedRole = UserRole.pelanggan;
+      } else {
+        determinedRole = UserRole.administrator;
+      }
 
-    setState(() {
-      _isSubmitting = false;
-    });
-
-    if (determinedRole == null) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+      });
+      _openDashboard(determinedRole);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Login gagal. Periksa username dan password Anda.'),
+        SnackBar(
+          content: Text('Login gagal: ${e.message}'),
           backgroundColor: Colors.red,
         ),
       );
-      return;
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Login gagal: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
-
-    _openDashboard(determinedRole);
   }
 
   @override
@@ -223,8 +273,8 @@ class _LoginPageState extends State<LoginPage> {
                 textInputAction: TextInputAction.next,
                 enabled: !_isSubmitting,
                 decoration: const InputDecoration(
-                  labelText: 'Username',
-                  hintText: 'Enter your username',
+                  labelText: 'Email',
+                  hintText: 'Masukkan email',
                 ),
               ),
               const SizedBox(height: 24),
@@ -245,8 +295,8 @@ class _LoginPageState extends State<LoginPage> {
                 child: Text(_isSubmitting ? 'Logging in...' : 'LOGIN'),
               ),
               const SizedBox(height: 24),
-               Text(
-                'Dummy login: admin / admin',
+              Text(
+                'Gunakan email & password yang sama seperti website.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                 textAlign: TextAlign.center,
               ),

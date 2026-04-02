@@ -15,6 +15,28 @@ class Pemasok {
     required this.jenisProduk,
   });
 
+  factory Pemasok.fromJson(Map<String, dynamic> json) {
+    return Pemasok(
+      id: (json['id'] ?? '').toString(),
+      namaPerusahaan: (json['namaPerusahaan'] ?? '').toString(),
+      kontakPerson: (json['kontakPerson'] ?? '').toString(),
+      noTelepon: (json['noTelepon'] ?? '').toString(),
+      alamat: (json['alamat'] ?? '').toString(),
+      jenisProduk: (json['jenisProduk'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toCreateJson() {
+    return {
+      'id': id,
+      'namaPerusahaan': namaPerusahaan,
+      'kontakPerson': kontakPerson,
+      'noTelepon': noTelepon,
+      'alamat': alamat,
+      'jenisProduk': jenisProduk,
+    };
+  }
+
   static List<Pemasok> get dummyData => [
         Pemasok(
           id: 'SUP-001',

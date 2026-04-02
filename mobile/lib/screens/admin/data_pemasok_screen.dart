@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/pemasok.dart';
+import '../../services/api_service.dart';
 
 class DataPemasokScreen extends StatefulWidget {
   final VoidCallback? onHomePressed;
@@ -11,14 +12,50 @@ class DataPemasokScreen extends StatefulWidget {
 }
 
 class _DataPemasokScreenState extends State<DataPemasokScreen> {
-  final List<Pemasok> _listPemasok = List.from(Pemasok.dummyData);
+  final ApiService _api = ApiService();
+  List<Pemasok> _listPemasok = [];
+  bool _isLoading = true;
+  String? _error;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPemasok();
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPemasok() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await _api.fetchPemasok();
+      if (!mounted) return;
+      setState(() {
+        _listPemasok = data;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   void _tambahPemasok() async {
@@ -29,12 +66,25 @@ class _DataPemasokScreenState extends State<DataPemasokScreen> {
 
     if (result != null) {
       if (!mounted) return;
-      setState(() {
-        _listPemasok.add(result);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${result.namaPerusahaan} berhasil ditambahkan')),
-      );
+      try {
+        await _api.createPemasok(result);
+        if (!mounted) return;
+        await _loadPemasok();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${result.namaPerusahaan} berhasil ditambahkan')),
+        );
+      } on ApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah pemasok: ${e.message}')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah pemasok: $e')),
+        );
+      }
     }
   }
 
@@ -107,37 +157,59 @@ class _DataPemasokScreenState extends State<DataPemasokScreen> {
             ),
           ),
           Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text('Data tidak ditemukan'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final p = filteredList[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          leading: const Icon(Icons.store, size: 36),
-                          title: Text(p.namaPerusahaan),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text('Kontak: ${p.kontakPerson} (${p.noTelepon})'),
-                              Text(
-                                p.jenisProduk,
-                                style: TextStyle(
-                                  color: Theme.of(context).primaryColor,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                              Text('Gagal memuat data: $_error'),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _loadPemasok,
+                                child: const Text('Coba Lagi'),
                               ),
                             ],
                           ),
-                          isThreeLine: true,
-                          trailing: const Icon(Icons.chevron_right),
                         ),
-                      );
-                    },
-                  ),
+                      )
+                    : (filteredList.isEmpty
+                        ? const Center(child: Text('Data tidak ditemukan'))
+                        : RefreshIndicator(
+                            onRefresh: _loadPemasok,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 100),
+                              itemCount: filteredList.length,
+                              itemBuilder: (context, index) {
+                                final p = filteredList[index];
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: ListTile(
+                                    leading: const Icon(Icons.store, size: 36),
+                                    title: Text(p.namaPerusahaan),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('Kontak: ${p.kontakPerson} (${p.noTelepon})'),
+                                        Text(
+                                          p.jenisProduk,
+                                          style: TextStyle(
+                                            color: Theme.of(context).primaryColor,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: const Icon(Icons.chevron_right),
+                                  ),
+                                );
+                              },
+                            ),
+                          )),
           ),
         ],
       ),

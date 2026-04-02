@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../models/bahan.dart';
+import '../../services/api_service.dart';
 
 class StokBahanScreen extends StatefulWidget {
   final VoidCallback? onHomePressed;
@@ -13,7 +15,10 @@ class StokBahanScreen extends StatefulWidget {
 }
 
 class _StokBahanScreenState extends State<StokBahanScreen> {
-  final List<Bahan> _listBahan = List.from(Bahan.dummyData);
+  final ApiService _api = ApiService();
+  List<Bahan> _listBahan = [];
+  bool _isLoading = true;
+  String? _error;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   String _filterJenisProduk = _jenisProdukOptions.first;
@@ -29,6 +34,12 @@ class _StokBahanScreenState extends State<StokBahanScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _loadBahan();
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
@@ -39,6 +50,33 @@ class _StokBahanScreenState extends State<StokBahanScreen> {
     return value.toStringAsFixed(2);
   }
 
+  Future<void> _loadBahan() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await _api.fetchBahan();
+      if (!mounted) return;
+      setState(() {
+        _listBahan = data;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
   Future<void> _tambahBahan() async {
     final result = await showDialog<Bahan>(
       context: context,
@@ -47,12 +85,25 @@ class _StokBahanScreenState extends State<StokBahanScreen> {
 
     if (result != null) {
       if (!mounted) return;
-      setState(() {
-        _listBahan.add(result);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Bahan ${result.nama} berhasil ditambahkan')),
-      );
+      try {
+        await _api.createBahan(result);
+        if (!mounted) return;
+        await _loadBahan();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Bahan ${result.nama} berhasil ditambahkan')),
+        );
+      } on ApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah bahan: ${e.message}')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah bahan: $e')),
+        );
+      }
     }
   }
 
@@ -170,45 +221,67 @@ class _StokBahanScreenState extends State<StokBahanScreen> {
             ),
           ),
           Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text('Data tidak ditemukan'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final bahan = filteredList[index];
-                      final bool menipis = bahan.stokMinimum > 0 && bahan.stok <= bahan.stokMinimum;
-                      final Color statusColor = menipis ? Colors.red : Colors.green;
-                      final String statusText = menipis ? 'Menipis' : 'Aman';
-
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            child: Text(bahan.satuan.substring(0, 1).toUpperCase()),
-                          ),
-                          title: Text('${bahan.nama} (${bahan.kode})'),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                'Stok: ${_formatNumber(bahan.stok)} ${bahan.satuan}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: statusColor,
-                                ),
-                              ),
-                              Text('Kategori: ${bahan.kategori} • Produk: ${bahan.jenisProduk}'),
-                              Text(
-                                'Minimum: ${_formatNumber(bahan.stokMinimum)} ${bahan.satuan} • Status: $statusText',
+                              Text('Gagal memuat data: $_error'),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _loadBahan,
+                                child: const Text('Coba Lagi'),
                               ),
                             ],
                           ),
-                          isThreeLine: true,
                         ),
-                      );
-                    },
-                  ),
+                      )
+                    : (filteredList.isEmpty
+                        ? const Center(child: Text('Data tidak ditemukan'))
+                        : RefreshIndicator(
+                            onRefresh: _loadBahan,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 100),
+                              itemCount: filteredList.length,
+                              itemBuilder: (context, index) {
+                                final bahan = filteredList[index];
+                                final bool menipis = bahan.stokMinimum > 0 && bahan.stok <= bahan.stokMinimum;
+                                final Color statusColor = menipis ? Colors.red : Colors.green;
+                                final String statusText = menipis ? 'Menipis' : 'Aman';
+
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      child: Text(bahan.satuan.substring(0, 1).toUpperCase()),
+                                    ),
+                                    title: Text('${bahan.nama} (${bahan.kode})'),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Stok: ${_formatNumber(bahan.stok)} ${bahan.satuan}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: statusColor,
+                                          ),
+                                        ),
+                                        Text('Kategori: ${bahan.kategori} • Produk: ${bahan.jenisProduk}'),
+                                        Text(
+                                          'Minimum: ${_formatNumber(bahan.stokMinimum)} ${bahan.satuan} • Status: $statusText',
+                                        ),
+                                      ],
+                                    ),
+                                    isThreeLine: true,
+                                  ),
+                                );
+                              },
+                            ),
+                          )),
           ),
         ],
       ),
@@ -222,83 +295,6 @@ class _StokBahanScreenState extends State<StokBahanScreen> {
       ),
     );
   }
-}
-
-class Bahan {
-  final String kode;
-  final String nama;
-  final String kategori;
-  final String jenisProduk;
-  final double stok;
-  final String satuan;
-  final double stokMinimum;
-
-  const Bahan({
-    required this.kode,
-    required this.nama,
-    required this.kategori,
-    required this.jenisProduk,
-    required this.stok,
-    required this.satuan,
-    required this.stokMinimum,
-  });
-
-  static const List<Bahan> dummyData = [
-    Bahan(
-      kode: 'BHN-001',
-      nama: 'Kain Kanvas',
-      kategori: 'Kain',
-      jenisProduk: 'Tas',
-      stok: 40,
-      satuan: 'm',
-      stokMinimum: 15,
-    ),
-    Bahan(
-      kode: 'BHN-002',
-      nama: 'Busa Lembar',
-      kategori: 'Busa',
-      jenisProduk: 'Sofa',
-      stok: 6,
-      satuan: 'lembar',
-      stokMinimum: 8,
-    ),
-    Bahan(
-      kode: 'BHN-003',
-      nama: 'Kancing 15mm',
-      kategori: 'Kancing',
-      jenisProduk: 'Jaket',
-      stok: 120,
-      satuan: 'pcs',
-      stokMinimum: 200,
-    ),
-    Bahan(
-      kode: 'BHN-004',
-      nama: 'Resleting 20cm',
-      kategori: 'Resleting',
-      jenisProduk: 'Celana',
-      stok: 30,
-      satuan: 'pcs',
-      stokMinimum: 20,
-    ),
-    Bahan(
-      kode: 'BHN-005',
-      nama: 'Benang Jahit',
-      kategori: 'Benang',
-      jenisProduk: 'Jaket',
-      stok: 9,
-      satuan: 'gulung',
-      stokMinimum: 10,
-    ),
-    Bahan(
-      kode: 'BHN-006',
-      nama: 'Velcro 2cm',
-      kategori: 'Velcro',
-      jenisProduk: 'Tas',
-      stok: 18,
-      satuan: 'm',
-      stokMinimum: 12,
-    ),
-  ];
 }
 
 class FormBahanDialog extends StatefulWidget {

@@ -1,0 +1,15 @@
+{
+  "source": "emsifa/api-wilayah-indonesia",
+  "levels": [
+    "province",
+    "regency",
+    "district",
+    "village"
+  ],
+  "counts": {
+    "provinces": 34,
+    "regencies": 514,
+    "districts": 7215,
+    "villages": 80534
+  }
+}

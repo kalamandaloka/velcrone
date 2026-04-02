@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/barang.dart';
+import '../../services/api_service.dart';
 
 class DataBarangScreen extends StatefulWidget {
   final VoidCallback? onHomePressed;
@@ -14,15 +15,50 @@ class DataBarangScreen extends StatefulWidget {
 }
 
 class _DataBarangScreenState extends State<DataBarangScreen> {
-  // Initialize with dummy data
-  final List<Barang> _listBarang = List.from(Barang.dummyData);
+  final ApiService _api = ApiService();
+  List<Barang> _listBarang = [];
+  bool _isLoading = true;
+  String? _error;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBarang();
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadBarang() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await _api.fetchBarang();
+      if (!mounted) return;
+      setState(() {
+        _listBarang = data;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   void _tambahDataBarang() async {
@@ -33,22 +69,36 @@ class _DataBarangScreenState extends State<DataBarangScreen> {
 
     if (result != null) {
       if (!mounted) return;
-      setState(() {
-        _listBarang.add(result);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Barang ${result.nama} berhasil ditambahkan')),
-      );
+      try {
+        await _api.createBarang(result);
+        if (!mounted) return;
+        await _loadBarang();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Barang ${result.nama} berhasil ditambahkan')),
+        );
+      } on ApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah barang: ${e.message}')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah barang: $e')),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Filter list based on search query
     final filteredList = _listBarang.where((barang) {
       final query = _searchQuery.toLowerCase();
       return barang.nama.toLowerCase().contains(query) ||
-             barang.kode.toLowerCase().contains(query);
+          barang.kode.toLowerCase().contains(query) ||
+          barang.kategori.toLowerCase().contains(query) ||
+          barang.jenis.toLowerCase().contains(query);
     }).toList();
 
     return Scaffold(
@@ -113,41 +163,69 @@ class _DataBarangScreenState extends State<DataBarangScreen> {
             ),
           ),
           Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text('Data tidak ditemukan'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final barang = filteredList[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            child: Text(barang.satuan.substring(0, 1).toUpperCase()),
-                          ),
-                          title: Text('${barang.nama} (${barang.kode})'),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text('Stok: ${barang.stok} ${barang.satuan}'),
-                              Text('Harga Jual: Rp ${barang.hargaJual}'),
-                              if (barang.diskon > 0)
-                                Text(
-                                  'Diskon: ${barang.diskon}%',
-                                  style: const TextStyle(color: Colors.red),
-                                ),
+                              Text('Gagal memuat data: $_error'),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _loadBarang,
+                                child: const Text('Coba Lagi'),
+                              ),
                             ],
                           ),
-                          isThreeLine: true,
-                          trailing: Text(
-                            'Beli: ${barang.hargaBeli}',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
                         ),
-                      );
-                    },
-                  ),
+                      )
+                    : (filteredList.isEmpty
+                        ? const Center(child: Text('Data tidak ditemukan'))
+                        : RefreshIndicator(
+                            onRefresh: _loadBarang,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 100),
+                              itemCount: filteredList.length,
+                              itemBuilder: (context, index) {
+                                final barang = filteredList[index];
+                                final ukuranText = barang.ukuran.isEmpty ? '-' : barang.ukuran.join(', ');
+                                final warnaText = barang.warna.isEmpty ? '-' : barang.warna.join(', ');
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      child: Text(
+                                        (barang.jenis.isNotEmpty ? barang.jenis.substring(0, 1) : 'B').toUpperCase(),
+                                      ),
+                                    ),
+                                    title: Text('${barang.nama} (${barang.kode})'),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text('Kategori: ${barang.kategori} • Jenis: ${barang.jenis}'),
+                                        Text('Ukuran: $ukuranText'),
+                                        Text('Warna: $warnaText'),
+                                        Text('Harga Jual: Rp ${barang.hargaJual}'),
+                                        if (barang.diskon > 0)
+                                          Text(
+                                            'Diskon: ${barang.diskon}%',
+                                            style: const TextStyle(color: Colors.red),
+                                          ),
+                                      ],
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: Text(
+                                      'Beli: ${barang.hargaBeli}',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          )),
           ),
         ],
       ),
@@ -174,22 +252,33 @@ class _FormBarangDialogState extends State<FormBarangDialog> {
   final _formKey = GlobalKey<FormState>();
   final _kodeController = TextEditingController();
   final _namaController = TextEditingController();
-  final _stokController = TextEditingController();
-  final _satuanController = TextEditingController();
+  final _kategoriController = TextEditingController();
+  final _ukuranController = TextEditingController();
+  final _warnaController = TextEditingController();
   final _hargaBeliController = TextEditingController();
   final _hargaJualController = TextEditingController();
   final _diskonController = TextEditingController();
+  String _jenis = 'Atasan';
 
   @override
   void dispose() {
     _kodeController.dispose();
     _namaController.dispose();
-    _stokController.dispose();
-    _satuanController.dispose();
+    _kategoriController.dispose();
+    _ukuranController.dispose();
+    _warnaController.dispose();
     _hargaBeliController.dispose();
     _hargaJualController.dispose();
     _diskonController.dispose();
     super.dispose();
+  }
+
+  List<String> _parseCsv(String value) {
+    return value
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
   }
 
   void _submit() {
@@ -197,8 +286,12 @@ class _FormBarangDialogState extends State<FormBarangDialog> {
       final barang = Barang(
         kode: _kodeController.text,
         nama: _namaController.text,
-        stok: int.tryParse(_stokController.text) ?? 0,
-        satuan: _satuanController.text,
+        kategori: _kategoriController.text.trim(),
+        jenis: _jenis,
+        ukuran: _parseCsv(_ukuranController.text),
+        warna: _parseCsv(_warnaController.text),
+        stok: 0,
+        satuan: 'pcs',
         hargaBeli: double.tryParse(_hargaBeliController.text) ?? 0,
         hargaJual: double.tryParse(_hargaJualController.text) ?? 0,
         diskon: double.tryParse(_diskonController.text) ?? 0,
@@ -229,27 +322,36 @@ class _FormBarangDialogState extends State<FormBarangDialog> {
                 validator: (value) =>
                     value == null || value.isEmpty ? 'Nama wajib diisi' : null,
               ),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _stokController,
-                      decoration: const InputDecoration(labelText: 'Stok'),
-                      keyboardType: TextInputType.number,
-                      validator: (value) =>
-                          value == null || value.isEmpty ? 'Wajib' : null,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _satuanController,
-                      decoration: const InputDecoration(labelText: 'Satuan'),
-                      validator: (value) =>
-                          value == null || value.isEmpty ? 'Wajib' : null,
-                    ),
-                  ),
+              DropdownButtonFormField<String>(
+                key: ValueKey(_jenis),
+                initialValue: _jenis,
+                decoration: const InputDecoration(labelText: 'Jenis'),
+                items: const [
+                  DropdownMenuItem(value: 'Atasan', child: Text('Atasan')),
+                  DropdownMenuItem(value: 'Pants', child: Text('Pants')),
                 ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _jenis = v);
+                },
+              ),
+              TextFormField(
+                controller: _kategoriController,
+                decoration: const InputDecoration(labelText: 'Kategori'),
+                validator: (value) =>
+                    value == null || value.trim().isEmpty ? 'Kategori wajib diisi' : null,
+              ),
+              TextFormField(
+                controller: _ukuranController,
+                decoration: const InputDecoration(labelText: 'Ukuran (pisahkan dengan koma)'),
+                validator: (value) =>
+                    value == null || value.trim().isEmpty ? 'Ukuran wajib diisi' : null,
+              ),
+              TextFormField(
+                controller: _warnaController,
+                decoration: const InputDecoration(labelText: 'Warna (pisahkan dengan koma)'),
+                validator: (value) =>
+                    value == null || value.trim().isEmpty ? 'Warna wajib diisi' : null,
               ),
               Row(
                 children: [

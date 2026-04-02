@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/pelanggan.dart';
+import '../../services/api_service.dart';
 
 class DataPelangganScreen extends StatefulWidget {
   final VoidCallback? onHomePressed;
@@ -11,14 +12,50 @@ class DataPelangganScreen extends StatefulWidget {
 }
 
 class _DataPelangganScreenState extends State<DataPelangganScreen> {
-  final List<Pelanggan> _listPelanggan = List.from(Pelanggan.dummyData);
+  final ApiService _api = ApiService();
+  List<Pelanggan> _listPelanggan = [];
+  bool _isLoading = true;
+  String? _error;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPelanggan();
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPelanggan() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await _api.fetchPelanggan();
+      if (!mounted) return;
+      setState(() {
+        _listPelanggan = data;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   void _tambahPelanggan() async {
@@ -29,12 +66,25 @@ class _DataPelangganScreenState extends State<DataPelangganScreen> {
 
     if (result != null) {
       if (!mounted) return;
-      setState(() {
-        _listPelanggan.add(result);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Pelanggan ${result.nama} berhasil ditambahkan')),
-      );
+      try {
+        await _api.createPelanggan(result);
+        if (!mounted) return;
+        await _loadPelanggan();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Pelanggan ${result.nama} berhasil ditambahkan')),
+        );
+      } on ApiException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah pelanggan: ${e.message}')),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menambah pelanggan: $e')),
+        );
+      }
     }
   }
 
@@ -107,39 +157,61 @@ class _DataPelangganScreenState extends State<DataPelangganScreen> {
             ),
           ),
           Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text('Data tidak ditemukan'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final p = filteredList[index];
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            child: Text(p.nama.substring(0, 1).toUpperCase()),
-                          ),
-                          title: Text(p.nama),
-                          subtitle: Text('${p.kategori} • ${p.noTelepon}'),
-                          trailing: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                '${p.poin} Poin',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              Text(
-                                p.id,
-                                style: Theme.of(context).textTheme.bodySmall,
+                              Text('Gagal memuat data: $_error'),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _loadPelanggan,
+                                child: const Text('Coba Lagi'),
                               ),
                             ],
                           ),
                         ),
-                      );
-                    },
-                  ),
+                      )
+                    : (filteredList.isEmpty
+                        ? const Center(child: Text('Data tidak ditemukan'))
+                        : RefreshIndicator(
+                            onRefresh: _loadPelanggan,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 100),
+                              itemCount: filteredList.length,
+                              itemBuilder: (context, index) {
+                                final p = filteredList[index];
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      child: Text(p.nama.substring(0, 1).toUpperCase()),
+                                    ),
+                                    title: Text(p.nama),
+                                    subtitle: Text('${p.kategori} • ${p.noTelepon}'),
+                                    trailing: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          '${p.poin} Poin',
+                                          style: const TextStyle(fontWeight: FontWeight.bold),
+                                        ),
+                                        Text(
+                                          p.id,
+                                          style: Theme.of(context).textTheme.bodySmall,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          )),
           ),
         ],
       ),

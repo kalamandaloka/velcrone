@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import 'dart:io';
 import '../../models/transaksi.dart';
 import '../../services/pdf_service.dart';
+import '../../services/api_service.dart';
 import 'form_transaksi_screen.dart';
 
 class RiwayatTransaksiScreen extends StatefulWidget {
@@ -18,11 +19,47 @@ class RiwayatTransaksiScreen extends StatefulWidget {
 }
 
 class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
-  // Use local state for filtering, though the dummy data is static
-  final List<Transaksi> _listTransaksi = List.from(Transaksi.dummyData);
+  final ApiService _api = ApiService();
+  List<Transaksi> _listTransaksi = [];
+  bool _isLoading = true;
+  String? _error;
   final TextEditingController _searchController = TextEditingController();
   final PdfService _pdfService = PdfService();
   String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTransaksi();
+  }
+
+  Future<void> _loadTransaksi() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final data = await _api.fetchTransaksi();
+      data.sort((a, b) => b.tanggal.compareTo(a.tanggal));
+      if (!mounted) return;
+      setState(() {
+        _listTransaksi = data;
+        _isLoading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString();
+      });
+    }
+  }
 
   Future<void> _handleDownload(Transaksi t) async {
     try {
@@ -92,13 +129,6 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
         );
       }
     }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    // Sort by date descending
-    _listTransaksi.sort((a, b) => b.tanggal.compareTo(a.tanggal));
   }
 
   @override
@@ -202,104 +232,126 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
             ),
           ),
           Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text('Data tidak ditemukan'))
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final t = filteredList[index];
-                      final dateStr = DateFormat('dd MMM yyyy HH:mm').format(t.tanggal);
-                      final currency = NumberFormat.currency(
-                        locale: 'id_ID',
-                        symbol: 'Rp ',
-                        decimalDigits: 0,
-                      );
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Gagal memuat data: $_error'),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _loadTransaksi,
+                                child: const Text('Coba Lagi'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : (filteredList.isEmpty
+                        ? const Center(child: Text('Data tidak ditemukan'))
+                        : RefreshIndicator(
+                            onRefresh: _loadTransaksi,
+                            child: ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 100),
+                              itemCount: filteredList.length,
+                              itemBuilder: (context, index) {
+                                final t = filteredList[index];
+                                final dateStr = DateFormat('dd MMM yyyy HH:mm').format(t.tanggal);
+                                final currency = NumberFormat.currency(
+                                  locale: 'id_ID',
+                                  symbol: 'Rp ',
+                                  decimalDigits: 0,
+                                );
 
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ExpansionTile(
-                          leading: Icon(
-                            t.status == 'Lunas'
-                                ? Icons.check_circle
-                                : Icons.pending_actions,
-                            color: t.status == 'Lunas' ? Colors.green : Colors.orange,
-                          ),
-                          title: Text(t.noFaktur),
-                          subtitle: Text(
-                            '$dateStr • ${t.namaPelanggan}',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          trailing: Text(
-                            currency.format(t.totalHarga),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(50),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Detail Barang:',
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  ...t.items.map((item) => Padding(
-                                        padding: const EdgeInsets.symmetric(vertical: 4),
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                return Card(
+                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: ExpansionTile(
+                                    leading: Icon(
+                                      t.status == 'Lunas'
+                                          ? Icons.check_circle
+                                          : Icons.pending_actions,
+                                      color: t.status == 'Lunas' ? Colors.green : Colors.orange,
+                                    ),
+                                    title: Text(t.noFaktur),
+                                    subtitle: Text(
+                                      '$dateStr • ${t.namaPelanggan}',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    trailing: Text(
+                                      currency.format(t.totalHarga),
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(16),
+                                        color: Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(50),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Expanded(
-                                              child: Text(
-                                                '${item.namaBarang} (${item.qty}x)',
-                                              ),
+                                            const Text(
+                                              'Detail Barang:',
+                                              style: TextStyle(fontWeight: FontWeight.bold),
                                             ),
-                                            Text(currency.format(item.subtotal)),
+                                            const SizedBox(height: 8),
+                                            ...t.items.map((item) => Padding(
+                                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                                  child: Row(
+                                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                    children: [
+                                                      Expanded(
+                                                        child: Text(
+                                                          '${item.namaBarang} (${item.qty}x)',
+                                                        ),
+                                                      ),
+                                                      Text(currency.format(item.subtotal)),
+                                                    ],
+                                                  ),
+                                                )),
+                                            const Divider(),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: [
+                                                const Text('Total'),
+                                                Text(
+                                                  currency.format(t.totalHarga),
+                                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 16),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                              children: [
+                                                IconButton.filled(
+                                                  onPressed: () => _handleDownload(t),
+                                                  icon: const Icon(Icons.download),
+                                                  tooltip: 'Download',
+                                                ),
+                                                IconButton.filled(
+                                                  onPressed: () => _handleShare(t),
+                                                  icon: const Icon(Icons.share),
+                                                  tooltip: 'Share',
+                                                ),
+                                                IconButton.filled(
+                                                  onPressed: () => _handlePrint(t),
+                                                  icon: const Icon(Icons.print),
+                                                  tooltip: 'Print',
+                                                ),
+                                              ],
+                                            ),
                                           ],
                                         ),
-                                      )),
-                                  const Divider(),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Text('Total'),
-                                      Text(
-                                        currency.format(t.totalHarga),
-                                        style: const TextStyle(fontWeight: FontWeight.bold),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 16),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                    children: [
-                                      IconButton.filled(
-                                        onPressed: () => _handleDownload(t),
-                                        icon: const Icon(Icons.download),
-                                        tooltip: 'Download',
-                                      ),
-                                      IconButton.filled(
-                                        onPressed: () => _handleShare(t),
-                                        icon: const Icon(Icons.share),
-                                        tooltip: 'Share',
-                                      ),
-                                      IconButton.filled(
-                                        onPressed: () => _handlePrint(t),
-                                        icon: const Icon(Icons.print),
-                                        tooltip: 'Print',
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                          )),
           ),
         ],
       ),
